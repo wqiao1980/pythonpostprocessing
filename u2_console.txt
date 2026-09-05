@@ -1,0 +1,6 @@
+Abaqus License Manager checked out the following license(s):
+"viewer" release 6.22 from Dassault2-Global
+<22 out of 25 licenses remain available>.
+Exit code: 1
+Abaqus Error: viewer exited with an error.
+Abaqus Error: Abaqus/Viewer exited with an error
