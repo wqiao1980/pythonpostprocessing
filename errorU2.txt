@@ -8,3 +8,10 @@ File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 3
 
 Abaqus Error: viewer exited with an error.
 Abaqus Error: Abaqus/Viewer exited with an error
+C:\Temp>abaqus viewer noGUI="C:\Data\BPTiberFL6\00_TestCode\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results"
+Abaqus License Manager checked out the following license(s):
+"viewer" release 6.22 from Dassault2-Global
+<23 out of 25 licenses remain available>.
+Exit code: 2
+Abaqus Error: viewer exited with an error.
+Abaqus Error: Abaqus/Viewer exited with an error
