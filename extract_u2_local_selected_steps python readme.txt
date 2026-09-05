@@ -274,3 +274,13 @@ Troubleshooting
    Viewer releases. Use the current extract_u2_local_selected_steps.py, which
    determines its location from the Abaqus noGUI execution information when
    __file__ is unavailable.
+
+6. Viewer exits with code 2 and no usage message
+
+   This occurred with an earlier version when Viewer placed the first user
+   option at sys.argv[0]. Use the current script, which accepts both known
+   Abaqus Viewer argument layouts. The current console output begins with:
+
+   extract_u2_local_selected_steps.py version 2026-09-04-r2
+
+   It then prints the script arguments received from Viewer.

@@ -87,14 +87,42 @@ DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
 FIELD_NAME = "U"
 COMPONENT_NAME = "U2"
+SCRIPT_VERSION = "2026-09-04-r2"
 
 
 def command_line_arguments():
-    """Return only arguments intended for this script after the Abaqus --."""
-    arguments = sys.argv[1:]
+    """Return script options for all known Abaqus noGUI argv layouts."""
+    arguments = list(sys.argv)
+
+    # Some Viewer releases preserve the separator.
     if "--" in arguments:
-        arguments = arguments[arguments.index("--") + 1 :]
-    return arguments
+        return arguments[arguments.index("--") + 1 :]
+
+    # Other Viewer releases remove the separator and expose the first script
+    # option at sys.argv[0], so blindly using sys.argv[1:] loses that option.
+    known_options = (
+        "--input-dir",
+        "--odb",
+        "--output-dir",
+        "--output-name",
+        "--instance",
+        "--start-node",
+        "--start-node-set",
+        "--frame-index",
+        "--list-steps",
+        "--steps",
+        "--step-range",
+        "-h",
+        "--help",
+    )
+    for index, argument in enumerate(arguments):
+        text = str(argument)
+        for option in known_options:
+            if text == option or text.startswith(option + "="):
+                return arguments[index:]
+
+    # No recognized script options means use all defaults.
+    return []
 
 
 def parse_arguments():
@@ -181,7 +209,10 @@ def parse_arguments():
         ),
     )
 
-    args = parser.parse_args(command_line_arguments())
+    script_arguments = command_line_arguments()
+    print("Script arguments: {0}".format(script_arguments))
+    sys.stdout.flush()
+    args = parser.parse_args(script_arguments)
     if args.frame_index < -1:
         parser.error("--frame-index must be -1 or zero or greater")
     if args.output_name and len(args.odb) != 1:
@@ -934,6 +965,8 @@ def print_steps(odb_path):
 
 
 def main():
+    print("extract_u2_local_selected_steps.py version {0}".format(SCRIPT_VERSION))
+    sys.stdout.flush()
     args = parse_arguments()
     input_dir = os.path.abspath(args.input_dir)
     odb_paths = common.find_odb_files(input_dir, args.odb)
