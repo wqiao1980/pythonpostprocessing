@@ -13,6 +13,22 @@ Run the commands below from an Abaqus Command Prompt using "abaqus python".
 The Abaqus/CAE or Viewer window does not need to be opened.
 
 
+Script dependencies
+-------------------
+
+The CPRESS/COPEN script is not self-contained. It requires this helper file
+in the same folder:
+
+extract_le11_the11_selected_steps_pipe_only.py
+
+The helper supplies ODB selection, step selection, PIPE-only path-distance,
+and Excel-writing utilities. Importing it does not run an LE11/THE11
+extraction.
+
+The dependency is one-way: the CPRESS/COPEN script needs the PIPE-only LE11
+script, but the PIPE-only LE11 script does not need the CPRESS/COPEN script.
+
+
 PIPE-only behavior
 ------------------
 

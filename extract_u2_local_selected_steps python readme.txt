@@ -21,6 +21,21 @@ The separate -- between the script filename and the script options is
 required.
 
 
+Script dependencies
+-------------------
+
+The U2 script is not self-contained. It requires this helper file in the same
+folder:
+
+extract_le11_the11_selected_steps.py
+
+The helper supplies ODB selection, step selection, pipeline-distance, and
+Excel-writing utilities. Importing it does not run an LE11/THE11 extraction.
+
+The dependency is one-way: the U2 script needs the original LE11/THE11
+script, but the original LE11/THE11 script does not need the U2 script.
+
+
 Meaning of local-nodal U2
 -------------------------
 

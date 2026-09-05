@@ -1,4 +1,4 @@
-Abaqus LE11/THE11/MECH11 Pipeline Report - User Instructions
+Abaqus PIPE-Only LE11/THE11/MECH11 Report - User Instructions
 ============================================================
 
 Required file
@@ -6,7 +6,7 @@ Required file
 
 Keep this Python file in the working folder:
 
-extract_le11_the11_selected_steps.py
+extract_le11_the11_selected_steps_pipe_only.py
 
 Run the commands below from an Abaqus Command Prompt. Use "abaqus python";
 the Abaqus/CAE or Viewer window does not need to be opened.
@@ -15,13 +15,23 @@ the Abaqus/CAE or Viewer window does not need to be opened.
 Script dependencies
 -------------------
 
-This LE11/THE11 script is self-contained. It does not need another local
-Python script in order to run. It requires only Abaqus Python and the ODB
-files being processed.
+This PIPE-only LE11/THE11 script is self-contained. It does not need another
+local Python script in order to run. It requires only Abaqus Python and the
+ODB files being processed.
 
-The U2 script may import this file as a helper, but that dependency works only
-in the U2-to-LE11 direction. Running this LE11 script does not start the U2
-script and does not require the U2 script to be present.
+The CPRESS/COPEN script may import this file as a helper, but that dependency
+works only in the CPRESS/COPEN-to-LE11 direction. Running this PIPE-only
+LE11 script does not start the CPRESS/COPEN script and does not require the
+CPRESS/COPEN script to be present.
+
+
+PIPE-only behavior
+------------------
+
+The path is constructed only from element types whose names begin with PIPE,
+such as PIPE31 and PIPE32. LE11 and THE11 element-nodal contributions from
+non-PIPE elements are excluded before section-point averaging and MECH11
+calculation.
 
 
 Results produced by the script
@@ -29,10 +39,10 @@ Results produced by the script
 
 For every processed ODB, the script creates two files:
 
-1. model_LE11_THE11_MECH11.rpt
-2. model_MAX_MECH11_along_path.xlsx
+1. model_PIPE_ONLY_LE11_THE11_MECH11.rpt
+2. model_PIPE_ONLY_MAX_MECH11_along_path.xlsx
 
-The report contains results along the complete pipeline path for every
+The report contains results along the complete PIPE-element pipeline path for every
 selected step:
 
 - LE11
@@ -61,11 +71,11 @@ Process all ODBs and all steps
 The following command processes every ODB in the current folder and every
 analysis step containing the required LE and THE field outputs:
 
-abaqus python extract_le11_the11_selected_steps.py
+abaqus python extract_le11_the11_selected_steps_pipe_only.py
 
 To process every ODB in another folder:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF"
+abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF"
 
 
 List the available steps
@@ -74,11 +84,11 @@ List the available steps
 This command lists the ordered steps in every ODB in the current folder. It
 does not create reports or Excel workbooks.
 
-abaqus python extract_le11_the11_selected_steps.py --list-steps
+abaqus python extract_le11_the11_selected_steps_pipe_only.py --list-steps
 
 To list the steps in ODBs located in another folder:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --list-steps
+abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --list-steps
 
 
 Output selected steps by name
@@ -87,7 +97,7 @@ Output selected steps by name
 List each exact step name after --steps. Put quotation marks around step
 names that contain spaces.
 
-abaqus python extract_le11_the11_selected_steps.py --steps "Step-2" "Step-5" "Step-8"
+abaqus python extract_le11_the11_selected_steps_pipe_only.py --steps "Step-2" "Step-5" "Step-8"
 
 Step-name matching is not case-sensitive. A requested step that is not in an
 ODB is omitted, and the script prints a note.
@@ -99,7 +109,7 @@ Output a range using step positions
 Step positions are 1-based and the range is inclusive. The following example
 outputs steps 3, 4, 5, 6, and 7:
 
-abaqus python extract_le11_the11_selected_steps.py --step-range 3 7
+abaqus python extract_le11_the11_selected_steps_pipe_only.py --step-range 3 7
 
 If an ODB has fewer steps than the requested ending position, the script uses
 the last available step and prints a note.
@@ -110,7 +120,7 @@ Output a range using step names
 
 The first and last named steps are both included:
 
-abaqus python extract_le11_the11_selected_steps.py --step-range "Preload" "Operation"
+abaqus python extract_le11_the11_selected_steps_pipe_only.py --step-range "Preload" "Operation"
 
 
 Process selected steps in the 12inTRF folder
@@ -118,11 +128,11 @@ Process selected steps in the 12inTRF folder
 
 Example: output steps 3 through 7 from every ODB in 12inTRF:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --step-range 3 7
+abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --step-range 3 7
 
 Example: output selected named steps from every ODB in 12inTRF:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --steps "Step-2" "Step-5"
+abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --steps "Step-2" "Step-5"
 
 
 Process one ODB only
@@ -130,11 +140,11 @@ Process one ODB only
 
 Add --odb followed by the ODB filename:
 
-abaqus python extract_le11_the11_selected_steps.py --odb "model.odb" --step-range 3 7
+abaqus python extract_le11_the11_selected_steps_pipe_only.py --odb "model.odb" --step-range 3 7
 
 If the ODB is in another folder, combine --input-dir and --odb:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --odb "model.odb" --steps "Step-2" "Step-5"
+abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\P1-2\00_NewFA\12inTRF" --odb "model.odb" --steps "Step-2" "Step-5"
 
 The --odb option may be repeated to process several named ODB files.
 
@@ -143,7 +153,7 @@ Path distance and starting node
 -------------------------------
 
 Path distance is the cumulative distance along the undeformed pipeline
-line-element mesh. It is calculated from the nodal coordinates in the ODB,
+PIPE-element mesh. It is calculated from the nodal coordinates in the ODB,
 so its units are the model length units.
 
 The default pipeline instance is:
@@ -217,7 +227,7 @@ the text report:
 
 The Excel workbook continues to use the ODB-based name:
 
-model_MAX_MECH11_along_path.xlsx
+model_PIPE_ONLY_MAX_MECH11_along_path.xlsx
 
 Existing output files with the same names are overwritten.
 
@@ -228,8 +238,8 @@ Example console output
 Selected steps:
   Step-2 (frame index 10)
   Step-5 (frame index 18)
-Wrote:      C:\Data\Results\model_LE11_THE11_MECH11.rpt
-Excel plot: C:\Data\Results\model_MAX_MECH11_along_path.xlsx
+Wrote:      C:\Data\Results\model_PIPE_ONLY_LE11_THE11_MECH11.rpt
+Excel plot: C:\Data\Results\model_PIPE_ONLY_MAX_MECH11_along_path.xlsx
 Completed: 1 succeeded, 0 failed.
 
 
@@ -245,3 +255,4 @@ Incorrect:
 --model.odb
 
 Use quotation marks around paths or names containing spaces.
+
