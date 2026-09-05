@@ -42,8 +42,10 @@ For every processed ODB, the script creates two files:
 1. model_U2_LOCAL.rpt
 2. model_U2_LOCAL_along_path.xlsx
 
-The text report contains one table for every selected step. Each row is a
-pipeline node and includes:
+The text report contains one table for every selected step. The path is
+constructed only from Abaqus element types beginning with PIPE, such as
+PIPE31 and PIPE32. Non-PIPE elements are excluded. Each row is a node
+belonging to the resulting PIPE path and includes:
 
 - Path ID
 - Path Distance
@@ -150,8 +152,9 @@ The --odb option may be repeated to process several named ODB files.
 Path distance and starting node
 -------------------------------
 
-Path distance is the cumulative distance along the undeformed pipeline
-line-element mesh. It is calculated from the nodal coordinates in the ODB.
+Path distance is the cumulative distance along the undeformed PIPE-element
+mesh. It is calculated from the nodal coordinates in the ODB. Elements whose
+type does not begin with PIPE are not used to construct the path.
 
 The default pipeline instance is:
 
@@ -243,6 +246,44 @@ script arguments. The second --odb is the actual script option.
 Use quotation marks around paths or names containing spaces.
 
 
+Debug logs and console capture
+------------------------------
+
+The script automatically creates this diagnostic log in --output-dir on
+every processing run:
+
+extract_u2_local_selected_steps.log
+
+For example, when the output directory is:
+
+C:\Data\BPTiberFL6\02_Results
+
+the automatic log is:
+
+C:\Data\BPTiberFL6\02_Results\extract_u2_local_selected_steps.log
+
+The log records the script version, complete sys.argv received from Viewer,
+input and output directories, number of ODB jobs, and a full traceback for
+every failed ODB.
+
+To also capture all Abaqus launcher and Python console output, add normal
+Windows Command Prompt redirection to the end of the command:
+
+> "C:\Data\BPTiberFL6\02_Results\u2_console.txt" 2>&1
+
+Complete example:
+
+abaqus viewer noGUI="C:\Data\BPTiberFL6\00_TestCode\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" > "C:\Data\BPTiberFL6\02_Results\u2_console.txt" 2>&1
+
+The > operator overwrites u2_console.txt on each run. Use >> instead of > to
+append new console output to the existing file.
+
+When reporting an error, provide both files:
+
+1. extract_u2_local_selected_steps.log
+2. u2_console.txt
+
+
 Troubleshooting
 ---------------
 
@@ -281,7 +322,7 @@ Troubleshooting
    option at sys.argv[0]. Use the current script, which accepts both known
    Abaqus Viewer argument layouts. The current console output begins with:
 
-   extract_u2_local_selected_steps.py version 2026-09-05-r4
+   extract_u2_local_selected_steps.py version 2026-09-05-r5
 
    It then prints the script arguments received from Viewer.
 
@@ -299,3 +340,11 @@ Troubleshooting
    This occurred with an earlier version in Abaqus Viewer 2022 noGUI mode.
    The current script configures the ODB display on a real viewport and
    creates a viewport automatically if Viewer did not create one.
+
+9. Non-pipe elements appear in the pipeline instance
+
+   Version 2026-09-05-r5 and later constructs the U2 path only from element
+   types beginning with PIPE. Nodes that belong only to beams, connectors,
+   solids, or other non-PIPE elements are excluded. A node shared by a PIPE
+   element and another element remains included because it belongs to the
+   PIPE path.

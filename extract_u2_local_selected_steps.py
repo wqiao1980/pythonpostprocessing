@@ -88,7 +88,7 @@ DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
 FIELD_NAME = "U"
 COMPONENT_NAME = "U2"
-SCRIPT_VERSION = "2026-09-05-r4"
+SCRIPT_VERSION = "2026-09-05-r5"
 
 
 def command_line_arguments():
@@ -293,6 +293,117 @@ def current_viewport_for_odb(odb):
         pass
     viewport.odbDisplay.basicOptions.setValues(transformationType=NODAL)
     return viewport
+
+
+def pipe_element_graph(instance, coordinates):
+    """Build path edges exclusively from Abaqus PIPE* elements."""
+    graph = {}
+    included_types = set()
+    excluded_types = set()
+    unsupported_pipe_types = set()
+
+    for element in instance.elements:
+        element_type = str(element.type).upper()
+        if not element_type.startswith("PIPE"):
+            excluded_types.add(element_type)
+            continue
+
+        included_types.add(element_type)
+        connectivity = tuple(int(label) for label in element.connectivity)
+        if len(connectivity) == 2:
+            physical_order = connectivity
+        elif len(connectivity) == 3:
+            # Quadratic PIPE elements list the end nodes first and midside
+            # node third. The physical sequence is end 1, midside, end 2.
+            physical_order = (
+                connectivity[0],
+                connectivity[2],
+                connectivity[1],
+            )
+        else:
+            unsupported_pipe_types.add(element_type)
+            continue
+
+        for index in range(len(physical_order) - 1):
+            first_label = physical_order[index]
+            second_label = physical_order[index + 1]
+            if first_label not in coordinates or second_label not in coordinates:
+                continue
+            length = common.distance_between(
+                coordinates[first_label], coordinates[second_label]
+            )
+            common.add_graph_edge(graph, first_label, second_label, length)
+
+    if not graph:
+        available = ", ".join(sorted(included_types)) or "none"
+        raise ValueError(
+            "No connected two- or three-node PIPE* elements were found in "
+            "instance '{0}'. PIPE element types found: {1}.".format(
+                instance.name, available
+            )
+        )
+    return graph, included_types, excluded_types, unsupported_pipe_types
+
+
+def build_pipe_pipeline_paths(instance, start_node, start_node_set):
+    """Return path data constructed only from PIPE* element connectivity."""
+    coordinates = common.node_coordinates(instance)
+    (
+        graph,
+        included_types,
+        excluded_types,
+        unsupported_pipe_types,
+    ) = pipe_element_graph(instance, coordinates)
+    notes = []
+    first_start = common.requested_path_start(
+        instance, graph, start_node, start_node_set, notes
+    )
+
+    components = []
+    first_component = common.connected_component(graph, first_start)
+    components.append((first_start, first_component))
+    remaining = set(graph.keys()).difference(first_component)
+    while remaining:
+        seed = min(remaining)
+        component = common.connected_component(graph, seed)
+        component_start = common.choose_component_start(graph, component)
+        components.append((component_start, component))
+        remaining.difference_update(component)
+
+    path_information = {}
+    origins = []
+    for path_id, (component_start, component) in enumerate(components, 1):
+        distances = common.shortest_path_distances(
+            graph, component, component_start
+        )
+        origins.append((path_id, component_start))
+        for node_label, distance in distances.items():
+            path_information[node_label] = (path_id, distance)
+
+    notes.insert(
+        0,
+        "path constructed only from PIPE element types: {0}".format(
+            ", ".join(sorted(included_types))
+        ),
+    )
+    if len(components) > 1:
+        notes.append(
+            "the PIPE mesh contains {0} disconnected paths; distance starts "
+            "at zero for each path ID".format(len(components))
+        )
+    if excluded_types:
+        notes.append(
+            "non-PIPE element types excluded from path construction: {0}".format(
+                ", ".join(sorted(excluded_types))
+            )
+        )
+    if unsupported_pipe_types:
+        notes.append(
+            "PIPE element types with unsupported connectivity excluded: {0}".format(
+                ", ".join(sorted(unsupported_pipe_types))
+            )
+        )
+    return path_information, coordinates, origins, notes
 
 
 def field_has_u2(frame):
@@ -856,9 +967,7 @@ def write_report(
             )
         instance = odb.rootAssembly.instances[instance_key]
         path_information, coordinates, path_origins, path_notes = (
-            common.build_pipeline_paths(
-                instance, start_node, start_node_set
-            )
+            build_pipe_pipeline_paths(instance, start_node, start_node_set)
         )
 
         available_steps = list(odb.steps.keys())
@@ -908,6 +1017,7 @@ def write_report(
             )
             report_file.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
             report_file.write("Pipeline instance: {0}\n".format(instance_key))
+            report_file.write("Element filter: PIPE* element types only\n")
             report_file.write(
                 "Transformation: Abaqus NODAL (*TRANSFORM local directions)\n"
             )
@@ -915,7 +1025,7 @@ def write_report(
                 "Fallback: nodes without *TRANSFORM are reported in global directions\n"
             )
             report_file.write(
-                "Path distance: cumulative distance along undeformed line-element mesh\n"
+                "Path distance: cumulative distance along undeformed PIPE mesh\n"
             )
             report_file.write("Path origins:")
             for path_id, origin_node in path_origins:
