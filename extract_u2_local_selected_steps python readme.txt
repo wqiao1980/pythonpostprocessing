@@ -281,7 +281,7 @@ Troubleshooting
    option at sys.argv[0]. Use the current script, which accepts both known
    Abaqus Viewer argument layouts. The current console output begins with:
 
-   extract_u2_local_selected_steps.py version 2026-09-05-r3
+   extract_u2_local_selected_steps.py version 2026-09-05-r4
 
    It then prints the script arguments received from Viewer.
 
@@ -293,3 +293,9 @@ Troubleshooting
 
    This file is placed in --output-dir. Open or share this log to identify the
    exact ODB and Abaqus API call that failed.
+
+8. Session has no attribute defaultOdbDisplay
+
+   This occurred with an earlier version in Abaqus Viewer 2022 noGUI mode.
+   The current script configures the ODB display on a real viewport and
+   creates a viewport automatically if Viewer did not create one.

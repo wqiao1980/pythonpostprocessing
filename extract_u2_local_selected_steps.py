@@ -28,6 +28,7 @@ import traceback
 import zipfile
 
 from abaqus import session
+import visualization
 from abaqusConstants import (
     COMMA_SEPARATED_VALUES,
     COMPONENT,
@@ -87,7 +88,7 @@ DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
 FIELD_NAME = "U"
 COMPONENT_NAME = "U2"
-SCRIPT_VERSION = "2026-09-05-r3"
+SCRIPT_VERSION = "2026-09-05-r4"
 
 
 def command_line_arguments():
@@ -259,12 +260,37 @@ def open_session_odb(odb_path):
 
 
 def current_viewport_for_odb(odb):
-    session.defaultOdbDisplay.basicOptions.setValues(
-        transformationType=NODAL
-    )
-    viewport_name = session.currentViewportName
-    viewport = session.viewports[viewport_name]
+    """Return a usable ODB viewport in both GUI and noGUI Viewer sessions."""
+    viewport = None
+
+    # Reuse the current viewport when Viewer created one.
+    viewport_name = getattr(session, "currentViewportName", None)
+    if viewport_name:
+        try:
+            viewport = session.viewports[viewport_name]
+        except KeyError:
+            viewport = None
+
+    # Some noGUI releases have viewports but no currentViewportName.
+    if viewport is None:
+        viewport_names = list(session.viewports.keys())
+        if viewport_names:
+            viewport = session.viewports[viewport_names[0]]
+
+    # Create a private viewport when noGUI started without any viewport.
+    if viewport is None:
+        viewport = session.Viewport(
+            name="U2 Local Extraction",
+            origin=(0.0, 0.0),
+            width=150.0,
+            height=100.0,
+        )
+
     viewport.setValues(displayedObject=odb)
+    try:
+        viewport.makeCurrent()
+    except AttributeError:
+        pass
     viewport.odbDisplay.basicOptions.setValues(transformationType=NODAL)
     return viewport
 
