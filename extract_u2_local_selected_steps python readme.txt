@@ -267,3 +267,10 @@ Troubleshooting
 
    The script requires an available Abaqus Viewer license because Viewer
    performs the NODAL transformation.
+
+5. NameError: name '__file__' is not defined
+
+   This occurred with an earlier version of the U2 script under some Abaqus
+   Viewer releases. Use the current extract_u2_local_selected_steps.py, which
+   determines its location from the Abaqus noGUI execution information when
+   __file__ is unavailable.

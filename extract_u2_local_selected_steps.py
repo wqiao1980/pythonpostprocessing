@@ -36,7 +36,47 @@ from abaqusConstants import (
 )
 
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+def running_script_directory():
+    """Find this file even when Abaqus noGUI does not define __file__."""
+    candidates = []
+
+    file_name = globals().get("__file__")
+    if file_name:
+        candidates.append(file_name)
+
+    # Abaqus/Viewer 2022 can execute a noGUI file without defining __file__.
+    # The code object still normally retains the filename used by execfile.
+    try:
+        candidates.append(sys._getframe().f_code.co_filename)
+    except (AttributeError, ValueError):
+        pass
+
+    # Also accept the common Abaqus launcher forms:
+    # noGUI=script.py, -noGUI=script.py, or a separate script.py argument.
+    for argument in sys.argv:
+        candidate = str(argument).strip().strip('"')
+        lowered = candidate.lower()
+        marker_position = lowered.find("nogui=")
+        if marker_position >= 0:
+            candidate = candidate[
+                marker_position + len("nogui=") :
+            ].strip().strip('"')
+        if candidate.lower().endswith(".py"):
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        if not candidate or str(candidate).startswith("<"):
+            continue
+        absolute_path = os.path.abspath(candidate)
+        if os.path.isfile(absolute_path):
+            return os.path.dirname(absolute_path)
+
+    # This final fallback supports running from the folder containing both
+    # scripts even on an unusual Abaqus launcher that hides the script path.
+    return os.getcwd()
+
+
+SCRIPT_DIR = running_script_directory()
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
