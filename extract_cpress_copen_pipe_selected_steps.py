@@ -38,7 +38,7 @@ import extract_le11_the11_selected_steps_pipe_only as common
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
 FIELD_NAMES = ("CPRESS", "COPEN")
-SCRIPT_VERSION = "2026-09-05-r2"
+SCRIPT_VERSION = "2026-09-05-r3"
 
 
 def parse_arguments():
@@ -208,28 +208,45 @@ def build_jobs(odb_paths, output_dir, output_name):
     return jobs
 
 
-def flattened_elements(container):
-    """Yield elements from instance- or assembly-level OdbSet containers."""
+def flattened_element_labels(container):
+    """Yield labels, using Abaqus' bulk array accessor when available."""
     if container is None:
         return
     if hasattr(container, "label") and hasattr(container, "connectivity"):
-        yield container
+        yield int(container.label)
         return
+
+    get_members = getattr(container, "getMemberFromAll", None)
+    if get_members is not None:
+        try:
+            labels = get_members("label")
+            for label in labels:
+                yield int(label)
+            return
+        except Exception:
+            pass
+
     try:
         members = iter(container)
     except TypeError:
         return
     for member in members:
         if hasattr(member, "label") and hasattr(member, "connectivity"):
-            yield member
+            yield int(member.label)
         else:
-            for element in flattened_elements(member):
-                yield element
+            for label in flattened_element_labels(member):
+                yield label
 
 
-def element_set_labels_for_instance(element_set, instance):
+def element_set_labels_for_instance(
+    element_set, instance, instance_labels=None
+):
     """Return labels belonging to the requested instance from an OdbSet."""
-    instance_labels = set(int(element.label) for element in instance.elements)
+    if instance_labels is None:
+        instance_labels = set(
+            int(label)
+            for label in flattened_element_labels(instance.elements)
+        )
     try:
         instance_names = tuple(element_set.instanceNames)
     except Exception:
@@ -246,18 +263,20 @@ def element_set_labels_for_instance(element_set, instance):
 
         elements_member = element_set.elements
         try:
-            outer_members = list(elements_member)
-        except TypeError:
-            outer_members = []
+            outer_count = len(elements_member)
+            first_member = elements_member[0] if outer_count else None
+        except (TypeError, AttributeError, IndexError):
+            outer_count = 0
+            first_member = None
 
         # Assembly-level sets normally store one element array per instance.
         if (
-            len(outer_members) == len(instance_names)
-            and outer_members
-            and not hasattr(outer_members[0], "label")
+            outer_count == len(instance_names)
+            and outer_count
+            and not hasattr(first_member, "label")
         ):
             selected_containers = [
-                outer_members[index] for index in matching_indices
+                elements_member[index] for index in matching_indices
             ]
         else:
             # A one-instance assembly set can be exposed directly as an
@@ -268,14 +287,15 @@ def element_set_labels_for_instance(element_set, instance):
 
     labels = set()
     for selected_container in selected_containers:
-        for element in flattened_elements(selected_container):
-            label = int(element.label)
+        for label in flattened_element_labels(selected_container):
             if label in instance_labels:
                 labels.add(label)
     return labels
 
 
-def resolve_element_set(odb, instance, requested_name):
+def resolve_element_set(
+    odb, instance, requested_name, instance_labels=None
+):
     """Find a case-insensitive instance- or assembly-level element set."""
     instance_key = common.repository_key(
         instance.elementSets, requested_name
@@ -283,7 +303,9 @@ def resolve_element_set(odb, instance, requested_name):
     if instance_key is not None:
         element_set = instance.elementSets[instance_key]
         return (
-            element_set_labels_for_instance(element_set, instance),
+            element_set_labels_for_instance(
+                element_set, instance, instance_labels
+            ),
             "instance set '{0}'".format(instance_key),
         )
 
@@ -293,7 +315,9 @@ def resolve_element_set(odb, instance, requested_name):
     if assembly_key is not None:
         element_set = odb.rootAssembly.elementSets[assembly_key]
         return (
-            element_set_labels_for_instance(element_set, instance),
+            element_set_labels_for_instance(
+                element_set, instance, instance_labels
+            ),
             "assembly set '{0}'".format(assembly_key),
         )
 
@@ -335,11 +359,13 @@ def resolve_pipe_element_selection(
     odb, instance, requested_sets, requested_ranges
 ):
     """Return selected PIPE labels/nodes; set and range requests form a union."""
-    pipe_elements = dict(
-        (int(element.label), element)
-        for element in instance.elements
-        if str(element.type).upper().startswith("PIPE")
-    )
+    instance_labels = set()
+    pipe_elements = {}
+    for element in instance.elements:
+        label = int(element.label)
+        instance_labels.add(label)
+        if str(element.type).upper().startswith("PIPE"):
+            pipe_elements[label] = element
     if not pipe_elements:
         raise ValueError(
             "Instance '{0}' contains no PIPE* elements.".format(instance.name)
@@ -351,7 +377,7 @@ def resolve_pipe_element_selection(
 
     for requested_name in requested_sets:
         set_labels, resolved_name = resolve_element_set(
-            odb, instance, requested_name
+            odb, instance, requested_name, instance_labels
         )
         matching_pipe_labels = set_labels.intersection(pipe_elements)
         selected_labels.update(matching_pipe_labels)
@@ -1330,34 +1356,48 @@ def print_element_sets(odb_path, instance_name):
             return
 
         instance = odb.rootAssembly.instances[instance_key]
-        pipe_labels = set(
-            int(element.label)
-            for element in instance.elements
-            if str(element.type).upper().startswith("PIPE")
-        )
-        entries = []
-        for set_name in sorted(instance.elementSets.keys()):
-            labels = element_set_labels_for_instance(
-                instance.elementSets[set_name], instance
-            )
-            entries.append(("instance", set_name, labels))
-        for set_name in sorted(odb.rootAssembly.elementSets.keys()):
-            labels = element_set_labels_for_instance(
-                odb.rootAssembly.elementSets[set_name], instance
-            )
-            entries.append(("assembly", set_name, labels))
+        instance_labels = set()
+        pipe_labels = set()
+        for element in instance.elements:
+            label = int(element.label)
+            instance_labels.add(label)
+            if str(element.type).upper().startswith("PIPE"):
+                pipe_labels.add(label)
+        instance_set_names = sorted(instance.elementSets.keys())
+        assembly_set_names = sorted(odb.rootAssembly.elementSets.keys())
 
         print("  Instance: {0}".format(instance_key))
         print("  Total PIPE elements: {0}".format(len(pipe_labels)))
-        if not entries:
+        if not instance_set_names and not assembly_set_names:
             print("  (no element sets)")
-        for scope, set_name, labels in entries:
+        sys.stdout.flush()
+
+        for set_name in instance_set_names:
+            labels = element_set_labels_for_instance(
+                instance.elementSets[set_name],
+                instance,
+                instance_labels,
+            )
             print(
                 "  {0:>8}  {1}  elements={2}, PIPE={3}".format(
-                    scope,
+                    "instance",
                     set_name,
                     len(labels),
-                    len(labels.intersection(pipe_labels)),
+                    sum(1 for label in labels if label in pipe_labels),
+                )
+            )
+        for set_name in assembly_set_names:
+            labels = element_set_labels_for_instance(
+                odb.rootAssembly.elementSets[set_name],
+                instance,
+                instance_labels,
+            )
+            print(
+                "  {0:>8}  {1}  elements={2}, PIPE={3}".format(
+                    "assembly",
+                    set_name,
+                    len(labels),
+                    sum(1 for label in labels if label in pipe_labels),
                 )
             )
     finally:

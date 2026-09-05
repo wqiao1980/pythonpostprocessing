@@ -138,6 +138,15 @@ abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_step
 
 This operation does not create reports or Excel workbooks.
 
+Version 2026-09-05-r3 and later caches the instance/PIPE labels once per ODB
+and uses Abaqus bulk label access when available, making this inventory much
+faster for large models with many element sets.
+
+Without --odb, every ODB in --input-dir is still opened and inventoried. For
+the fastest check of one model, specify its filename:
+
+abaqus python extract_cpress_copen_pipe_selected_steps.py --input-dir "C:\Data\BPTiberFL6" --odb "model.odb" --instance "PART-1-1" --list-element-sets
+
 
 Restrict output by element set
 ------------------------------
@@ -315,7 +324,7 @@ The > operator overwrites contact_console.txt. Use >> to append instead.
 Example console output
 ----------------------
 
-extract_cpress_copen_pipe_selected_steps.py version 2026-09-05-r2
+extract_cpress_copen_pipe_selected_steps.py version 2026-09-05-r3
 Opening: C:\Data\Results\model.odb
 Selected steps:
   Step-2 (frame index 10)
