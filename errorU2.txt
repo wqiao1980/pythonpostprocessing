@@ -16,3 +16,10 @@ Exit code: 2
 Abaqus Error: viewer exited with an error.
 Abaqus Error: Abaqus/Viewer exited with an error
 abaqus viewer noGUI="C:\Data\BPTiberFL6\00_TestCode\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" > "C:\Data\BPTiberFL6\02_Results\u2_console.txt" 2>&1
+C:\Temp>abaqus python "C:\Data\BPTiberFL6\00_TestCode\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\BPTiberFL6" --instance "PART-1-1" --list-element-sets
+Traceback (most recent call last):
+  File "C:\Data\BPTiberFL6\00_TestCode\extract_cpress_copen_pipe_selected_steps.py", line 35, in <module>
+    import extract_le11_the11_selected_steps_pipe_only as common
+  File "SMAPython\SMAPytLibPy.m\src\site.py", line 120, in _numpyHook
+    d = set()
+ImportError: No module named extract_le11_the11_selected_steps_pipe_only
