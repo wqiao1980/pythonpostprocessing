@@ -1,0 +1,34 @@
+extract_u2_local_selected_steps.py version 2026-09-05-r3
+Time: 2026-09-05 09:11:00.277000
+sys.argv: ['C:\\SIMULIA\\EstProducts\\2022\\win_b64\\code\\bin\\ABQvwrK.exe', '-viewer', '-noGUI', 'C:\\Data\\BPTiberFL6\\00_TestCode\\extract_u2_local_selected_steps.py', '-lmlog', 'ON', '-tmpdir', 'C:\\Users\\wqiao\\AppData\\Local\\Temp', '--input-dir', 'C:\\Data\\BPTiberFL6', '--output-dir', 'C:\\Data\\BPTiberFL6\\02_Results']
+Input directory: C:\Data\BPTiberFL6
+Output directory: C:\Data\BPTiberFL6\02_Results
+ODB jobs: 2
+
+Failures: 2
+
+================================================================================
+ODB: C:\Data\BPTiberFL6\BPTiber_With_BM_FL6_TestBase_00_JOBBEBE2-10DMin.odb
+Error: 'Session' object has no attribute 'defaultOdbDisplay'
+
+Traceback (most recent call last):
+  File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 1022, in main
+    start_node_set=args.start_node_set,
+  File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 860, in write_report
+    viewport = current_viewport_for_odb(odb)
+  File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 262, in current_viewport_for_odb
+    session.defaultOdbDisplay.basicOptions.setValues(
+AttributeError: 'Session' object has no attribute 'defaultOdbDisplay'
+
+================================================================================
+ODB: C:\Data\BPTiberFL6\BPTiber_With_BM_FL6_TestBase_00_JOBBEHE2-9C70ksi.odb
+Error: 'Session' object has no attribute 'defaultOdbDisplay'
+
+Traceback (most recent call last):
+  File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 1022, in main
+    start_node_set=args.start_node_set,
+  File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 860, in write_report
+    viewport = current_viewport_for_odb(odb)
+  File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 262, in current_viewport_for_odb
+    session.defaultOdbDisplay.basicOptions.setValues(
+AttributeError: 'Session' object has no attribute 'defaultOdbDisplay'

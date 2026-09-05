@@ -1,6 +1,11 @@
 Abaqus License Manager checked out the following license(s):
 "viewer" release 6.22 from Dassault2-Global
 <22 out of 25 licenses remain available>.
-Exit code: 1
+RuntimeError: 2 ODB extraction(s) failed. Full diagnostics: C:\Data\BPTiberFL6\02_Results\extract_u2_local_selected_steps.log
+File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 1055, in <module>
+    sys.exit(main())
+File "C:/Data/BPTiberFL6/00_TestCode/extract_u2_local_selected_steps.py", line 1048, in main
+    len(failures), log_path
+
 Abaqus Error: viewer exited with an error.
 Abaqus Error: Abaqus/Viewer exited with an error
