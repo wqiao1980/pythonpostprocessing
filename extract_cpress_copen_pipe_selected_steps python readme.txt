@@ -36,17 +36,29 @@ The pipeline path is constructed only from element types whose names begin
 with PIPE, such as PIPE31 and PIPE32. Non-PIPE elements are excluded from the
 path.
 
-CPRESS and COPEN values are retained only for nodes on this PIPE path. When
-element provenance is present in element-nodal contact output, contributions
-from non-PIPE elements are also excluded.
+CPRESS and COPEN values are retained only for nodes on this PIPE path.
+
+Important: contact field output can be stored at contact/element-nodal
+locations. Its elementLabel may identify a contact or surface representation
+rather than the underlying PIPE mesh element. Version 2026-09-05-r5 and later
+therefore restricts results by PIPE-path node membership and does not reject a
+valid contact value merely because its contact element label is not a PIPE
+element label.
 
 Users can further restrict output by element set, inclusive element-label
 range, or a union of multiple sets and ranges. If no element selection option
 is provided, all PIPE elements are processed.
 
-For purely nodal contact output, Abaqus does not provide an element label.
-Such a value is retained when its node belongs to the PIPE path. Therefore, a
-node shared by a PIPE element and another element remains a PIPE-path node.
+Version 2026-09-05-r6 changes explicit element selection for speed. When
+--element-set or --element-range is supplied, the selected elements are
+trusted and their element types are not checked again. The user must ensure
+that every requested set/range contains the intended pipeline elements. The
+complete PIPE path is still identified once to preserve the original
+full-pipeline distances.
+
+For nodal contact output, Abaqus may not provide an element label. Such a
+value is retained when its node belongs to the PIPE path. Therefore, a node
+shared by a PIPE element and another element remains a PIPE-path node.
 
 
 Contact-value handling
@@ -62,6 +74,23 @@ surfaces or contributions. For each selected step and PIPE-path node:
 
 Missing contact output is left blank. The script does not replace a missing
 value with zero.
+
+Abaqus can store a very large finite placeholder, commonly with a magnitude
+near 1E38, when a contact result is undefined or unavailable. Script version
+2026-09-05-r4 and later treats CPRESS or COPEN values whose absolute magnitude
+is at least 1.0E30 as undefined. Version 2026-09-05-r5 also corrects the
+contact element-label filtering that could discard a real COPEN value at the
+same PIPE node. Undefined values are left blank rather than reported as
+physical results. The text report and console show how many such values were
+discarded.
+
+The default limit can be changed if necessary. For example:
+
+abaqus python extract_cpress_copen_pipe_selected_steps.py --undefined-value-limit 1.0E35
+
+The limit applies to both positive and negative values and to both CPRESS and
+COPEN. It should remain well above every physically possible result in the
+model.
 
 CPRESS uses the model stress units. COPEN and path distance use the model
 length units.
@@ -127,8 +156,9 @@ abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_step
 List the available element sets
 -------------------------------
 
-List instance- and assembly-level element sets, including the total element
-count and PIPE-element count for the selected pipeline instance:
+List only instance- and assembly-level element sets that contain at least one
+PIPE element in the selected pipeline instance. The displayed count is the
+number of PIPE elements in each listed set:
 
 abaqus python extract_cpress_copen_pipe_selected_steps.py --list-element-sets
 
@@ -138,9 +168,10 @@ abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_step
 
 This operation does not create reports or Excel workbooks.
 
-Version 2026-09-05-r3 and later caches the instance/PIPE labels once per ODB
-and uses Abaqus bulk label access when available, making this inventory much
-faster for large models with many element sets.
+Version 2026-09-05-r6 skips every set that contains no PIPE elements. It
+caches the PIPE labels once per ODB and uses Abaqus bulk label access when
+available, making the inventory faster and its console output shorter for
+large models with many element sets.
 
 Without --odb, every ODB in --input-dir is still opened and inventoried. For
 the fastest check of one model, specify its filename:
@@ -160,8 +191,9 @@ Repeat --element-set to combine several sets:
 
 abaqus python extract_cpress_copen_pipe_selected_steps.py --element-set "ZONE_A" --element-set "ZONE_B"
 
-Set-name matching is not case-sensitive. Only PIPE elements contained in the
-requested sets are retained.
+Set-name matching is not case-sensitive. All elements contained in a
+requested set are accepted without checking element.type. Make sure the set
+contains the intended pipeline elements.
 
 
 Restrict output by element-number range
@@ -175,14 +207,16 @@ Repeat the option to select multiple ranges:
 
 abaqus python extract_cpress_copen_pipe_selected_steps.py --element-range 1001 1200 --element-range 2001 2200
 
-Only PIPE element labels inside the requested ranges are retained.
+All existing element labels inside the requested ranges are accepted without
+checking element.type. Make sure the ranges contain the intended pipeline
+elements.
 
 
 Combine element sets and ranges
 -------------------------------
 
 Element sets and ranges are combined as a union. This example selects all
-PIPE elements in CONTACT_ZONE plus PIPE elements numbered 3001 through 3200:
+elements in CONTACT_ZONE plus elements numbered 3001 through 3200:
 
 abaqus python extract_cpress_copen_pipe_selected_steps.py --element-set "CONTACT_ZONE" --element-range 3001 3200
 
@@ -324,11 +358,12 @@ The > operator overwrites contact_console.txt. Use >> to append instead.
 Example console output
 ----------------------
 
-extract_cpress_copen_pipe_selected_steps.py version 2026-09-05-r3
+extract_cpress_copen_pipe_selected_steps.py version 2026-09-05-r6
 Opening: C:\Data\Results\model.odb
 Selected steps:
   Step-2 (frame index 10)
   Step-5 (frame index 18)
+Undefined/non-finite values discarded: CPRESS=0, COPEN=28
 Wrote:      C:\Data\Results\model_PIPE_ONLY_CPRESS_COPEN.rpt
 Excel plot: C:\Data\Results\model_PIPE_ONLY_CPRESS_COPEN_along_path.xlsx
 Completed: 1 succeeded, 0 failed.
@@ -364,14 +399,25 @@ Troubleshooting
    Abaqus may provide COPEN only for nodes in contact or sufficiently close
    to contact, depending on the contact formulation and tracking settings.
 
-6. Requested sets or ranges contain no PIPE elements
+6. Requested sets or ranges produce no pipeline-path nodes
 
-   Run --list-element-sets and confirm the set has a nonzero PIPE count.
-   For ranges, confirm that the inclusive element labels correspond to PIPE
-   elements in the selected instance.
+   Run --list-element-sets and confirm the intended set is listed. For ranges,
+   confirm that the inclusive labels exist in the selected instance and are
+   the intended pipeline elements. Explicit selections are trusted and their
+   element types are not checked.
 
 7. A boundary node also belongs to an unselected element
 
    Selection is element-based, but CPRESS/COPEN output is organized along
    nodes. Every node belonging to a selected PIPE element is retained,
    including an end node shared with an adjacent unselected element.
+
+8. COPEN is approximately 1E38 or -1E38
+
+   This is an undefined/unavailable Abaqus placeholder, not a physical gap.
+   Version 2026-09-05-r4 and later removes it automatically using the default
+   absolute-value limit of 1.0E30. Version 2026-09-05-r5 also retains valid
+   contact/element-nodal values whose contact element label differs from the
+   PIPE mesh element label. Rerun the extraction to replace workbooks created
+   by an older script. If legitimate model results can exceed the default
+   limit, set a higher value with --undefined-value-limit.

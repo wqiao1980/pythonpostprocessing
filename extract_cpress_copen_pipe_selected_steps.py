@@ -14,7 +14,8 @@ dependency-free Excel-writing utilities.
 
 At a path node with multiple contact values, the script reports the maximum
 CPRESS and minimum COPEN. Missing contact output is left blank, not replaced
-with zero. The Excel workbook contains native, user-editable scatter charts.
+with zero. Abaqus undefined placeholders with very large magnitude are also
+left blank. The Excel workbook contains native, user-editable scatter charts.
 """
 
 import argparse
@@ -37,8 +38,9 @@ import extract_le11_the11_selected_steps_pipe_only as common
 
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
+DEFAULT_UNDEFINED_ABS_LIMIT = 1.0e30
 FIELD_NAMES = ("CPRESS", "COPEN")
-SCRIPT_VERSION = "2026-09-05-r3"
+SCRIPT_VERSION = "2026-09-05-r6"
 
 
 def parse_arguments():
@@ -84,7 +86,8 @@ def parse_arguments():
         metavar="SET",
         help=(
             "Restrict output to this element set. May be repeated. "
-            "Instance- and assembly-level element sets are supported."
+            "Instance- and assembly-level element sets are supported; "
+            "selected element types are trusted and not checked."
         ),
     )
     parser.add_argument(
@@ -96,7 +99,8 @@ def parse_arguments():
         metavar=("FIRST", "LAST"),
         help=(
             "Restrict output to this inclusive element-label range. May be "
-            "repeated. Sets and ranges are combined as a union."
+            "repeated. Sets and ranges are combined as a union; selected "
+            "element types are trusted and not checked."
         ),
     )
     parser.add_argument(
@@ -123,6 +127,15 @@ def parse_arguments():
         ),
     )
     parser.add_argument(
+        "--undefined-value-limit",
+        type=float,
+        default=DEFAULT_UNDEFINED_ABS_LIMIT,
+        help=(
+            "Treat contact values with absolute magnitude at or above this "
+            "limit as undefined and leave them blank (default: 1.0e30)."
+        ),
+    )
+    parser.add_argument(
         "--list-steps",
         action="store_true",
         help="List each ODB's ordered steps and exit without writing results.",
@@ -131,8 +144,8 @@ def parse_arguments():
         "--list-element-sets",
         action="store_true",
         help=(
-            "List element sets and their PIPE-element counts, then exit "
-            "without writing results."
+            "List only element sets containing PIPE elements and their "
+            "PIPE-element counts, then exit without writing results."
         ),
     )
 
@@ -160,6 +173,8 @@ def parse_arguments():
         parser.error("--frame-index must be -1 or zero or greater")
     if args.output_name and len(args.odb) != 1:
         parser.error("--output-name requires exactly one --odb")
+    if args.undefined_value_limit <= 0.0:
+        parser.error("--undefined-value-limit must be greater than zero")
     for first_label, last_label in args.element_range:
         if first_label > last_label:
             parser.error(
@@ -239,10 +254,10 @@ def flattened_element_labels(container):
 
 
 def element_set_labels_for_instance(
-    element_set, instance, instance_labels=None
+    element_set, instance, instance_labels=None, trust_instance_scope=False
 ):
     """Return labels belonging to the requested instance from an OdbSet."""
-    if instance_labels is None:
+    if instance_labels is None and not trust_instance_scope:
         instance_labels = set(
             int(label)
             for label in flattened_element_labels(instance.elements)
@@ -288,13 +303,17 @@ def element_set_labels_for_instance(
     labels = set()
     for selected_container in selected_containers:
         for label in flattened_element_labels(selected_container):
-            if label in instance_labels:
+            if trust_instance_scope or label in instance_labels:
                 labels.add(label)
     return labels
 
 
 def resolve_element_set(
-    odb, instance, requested_name, instance_labels=None
+    odb,
+    instance,
+    requested_name,
+    instance_labels=None,
+    trust_instance_scope=False,
 ):
     """Find a case-insensitive instance- or assembly-level element set."""
     instance_key = common.repository_key(
@@ -304,7 +323,10 @@ def resolve_element_set(
         element_set = instance.elementSets[instance_key]
         return (
             element_set_labels_for_instance(
-                element_set, instance, instance_labels
+                element_set,
+                instance,
+                instance_labels,
+                trust_instance_scope,
             ),
             "instance set '{0}'".format(instance_key),
         )
@@ -316,7 +338,10 @@ def resolve_element_set(
         element_set = odb.rootAssembly.elementSets[assembly_key]
         return (
             element_set_labels_for_instance(
-                element_set, instance, instance_labels
+                element_set,
+                instance,
+                instance_labels,
+                trust_instance_scope,
             ),
             "assembly set '{0}'".format(assembly_key),
         )
@@ -355,71 +380,128 @@ def element_selection_description(requested_sets, requested_ranges):
     return "; ".join(parts) if parts else "all PIPE* elements"
 
 
+def instance_elements_from_labels(instance, selected_labels):
+    """Return selected instance elements without reading their element types."""
+    selected_elements = {}
+    get_element = getattr(instance, "getElementFromLabel", None)
+    if get_element is not None:
+        lookup_failed = False
+        for label in selected_labels:
+            try:
+                selected_elements[label] = get_element(label=label)
+            except TypeError:
+                try:
+                    selected_elements[label] = get_element(label)
+                except Exception:
+                    lookup_failed = True
+                    break
+            except Exception:
+                lookup_failed = True
+                break
+        if not lookup_failed:
+            return selected_elements
+
+    # Fallback for Abaqus releases/objects without direct label lookup.
+    selected_elements = {}
+    remaining = set(selected_labels)
+    for element in instance.elements:
+        label = int(element.label)
+        if label in remaining:
+            selected_elements[label] = element
+            remaining.remove(label)
+            if not remaining:
+                break
+    return selected_elements
+
+
 def resolve_pipe_element_selection(
     odb, instance, requested_sets, requested_ranges
 ):
-    """Return selected PIPE labels/nodes; set and range requests form a union."""
-    instance_labels = set()
-    pipe_elements = {}
-    for element in instance.elements:
-        label = int(element.label)
-        instance_labels.add(label)
-        if str(element.type).upper().startswith("PIPE"):
-            pipe_elements[label] = element
-    if not pipe_elements:
-        raise ValueError(
-            "Instance '{0}' contains no PIPE* elements.".format(instance.name)
-        )
-
+    """Return output labels/nodes; explicit selections are trusted as PIPE."""
     selection_requested = bool(requested_sets or requested_ranges)
     selected_labels = set()
     notes = []
 
-    for requested_name in requested_sets:
-        set_labels, resolved_name = resolve_element_set(
-            odb, instance, requested_name, instance_labels
-        )
-        matching_pipe_labels = set_labels.intersection(pipe_elements)
-        selected_labels.update(matching_pipe_labels)
-        notes.append(
-            "{0}: selected {1} PIPE element(s) from {2} element(s)".format(
-                resolved_name,
-                len(matching_pipe_labels),
-                len(set_labels),
+    if selection_requested:
+        # The user explicitly supplied the output elements and is responsible
+        # for their types. Avoid scanning and checking every element.type.
+        for requested_name in requested_sets:
+            set_labels, resolved_name = resolve_element_set(
+                odb,
+                instance,
+                requested_name,
+                trust_instance_scope=True,
             )
-        )
+            selected_labels.update(set_labels)
+            notes.append(
+                "{0}: selected {1} element(s); element types trusted".format(
+                    resolved_name, len(set_labels)
+                )
+            )
 
-    for first_label, last_label in requested_ranges:
-        matching_pipe_labels = set(
-            label
-            for label in pipe_elements
-            if first_label <= label <= last_label
-        )
-        selected_labels.update(matching_pipe_labels)
-        notes.append(
-            "element range {0}-{1}: selected {2} PIPE element(s)".format(
-                first_label, last_label, len(matching_pipe_labels)
-            )
-        )
+        if requested_ranges:
+            range_matches = [0] * len(requested_ranges)
+            for element in instance.elements:
+                label = int(element.label)
+                for range_index, (first_label, last_label) in enumerate(
+                    requested_ranges
+                ):
+                    if first_label <= label <= last_label:
+                        selected_labels.add(label)
+                        range_matches[range_index] += 1
+            for range_index, (first_label, last_label) in enumerate(
+                requested_ranges
+            ):
+                notes.append(
+                    "element range {0}-{1}: selected {2} element(s); "
+                    "element types trusted".format(
+                        first_label,
+                        last_label,
+                        range_matches[range_index],
+                    )
+                )
 
-    if not selection_requested:
-        selected_labels = set(pipe_elements.keys())
-        notes.append(
-            "no element filter requested; all {0} PIPE element(s) selected".format(
-                len(selected_labels)
+        if not selected_labels:
+            raise ValueError(
+                "The requested element sets/ranges contain no elements in "
+                "instance '{0}'.".format(instance.name)
             )
+
+        selected_elements = instance_elements_from_labels(
+            instance, selected_labels
         )
-    elif not selected_labels:
-        raise ValueError(
-            "The requested element sets/ranges contain no PIPE* elements "
-            "in instance '{0}'.".format(instance.name)
+        missing_labels = selected_labels.difference(selected_elements)
+        if missing_labels:
+            preview = ", ".join(
+                str(label) for label in sorted(missing_labels)[:20]
+            )
+            raise ValueError(
+                "Selected element labels were not found in instance '{0}': "
+                "{1}".format(instance.name, preview)
+            )
+        total_pipe_elements = None
+    else:
+        selected_elements = {}
+        for element in instance.elements:
+            if str(element.type).upper().startswith("PIPE"):
+                selected_elements[int(element.label)] = element
+        if not selected_elements:
+            raise ValueError(
+                "Instance '{0}' contains no PIPE* elements.".format(
+                    instance.name
+                )
+            )
+        selected_labels = set(selected_elements.keys())
+        total_pipe_elements = len(selected_elements)
+        notes.append(
+            "no element filter requested; all {0} PIPE element(s) "
+            "selected".format(len(selected_labels))
         )
 
     selected_nodes = set()
-    for label in selected_labels:
+    for element in selected_elements.values():
         selected_nodes.update(
-            int(node_label)
-            for node_label in pipe_elements[label].connectivity
+            int(node_label) for node_label in element.connectivity
         )
 
     return (
@@ -427,7 +509,7 @@ def resolve_pipe_element_selection(
         selected_nodes,
         element_selection_description(requested_sets, requested_ranges),
         notes,
-        len(pipe_elements),
+        total_pipe_elements,
     )
 
 
@@ -521,19 +603,14 @@ def value_instance_matches(value, instance_name):
         return True
 
 
-def optional_element_label(value):
-    try:
-        return int(value.elementLabel)
-    except Exception:
-        return None
-
-
-def scalar_value(value):
+def scalar_value(value, undefined_abs_limit):
     data = common.field_value_data(value)
     if not data:
         raise ValueError("A contact field value contains no scalar data.")
     scalar = float(data[0])
     if math.isnan(scalar) or math.isinf(scalar):
+        return None
+    if abs(scalar) >= undefined_abs_limit:
         return None
     return scalar
 
@@ -543,11 +620,12 @@ def aggregate_contact_values(
     base_name,
     instance_name,
     allowed_nodes,
-    pipe_element_labels,
+    undefined_abs_limit,
 ):
     values_by_node = {}
     counts_by_node = {}
     source_names = []
+    discarded_undefined = 0
     reduce_with_maximum = base_name.upper() == "CPRESS"
 
     for source_name, field_output in contact_field_outputs(frame, base_name):
@@ -562,18 +640,16 @@ def aggregate_contact_values(
             if node_label not in allowed_nodes:
                 continue
 
-            # ELEMENT_NODAL contact data can identify its source element.
-            # NODAL contact data do not carry an element label; those values
-            # are retained when their node belongs to the PIPE path.
-            element_label = optional_element_label(value)
-            if (
-                element_label not in (None, 0)
-                and element_label not in pipe_element_labels
-            ):
-                continue
+            # Restrict contact output by PIPE-path node membership. Do not
+            # compare value.elementLabel with PIPE mesh labels: for contact
+            # surface output that label can identify the contact/surface
+            # representation rather than the underlying PIPE element. Such a
+            # comparison can discard the real COPEN value and leave only an
+            # undefined nodal placeholder for the same PIPE node.
 
-            contact_value = scalar_value(value)
+            contact_value = scalar_value(value, undefined_abs_limit)
             if contact_value is None:
+                discarded_undefined += 1
                 continue
             counts_by_node[node_label] = counts_by_node.get(node_label, 0) + 1
             if node_label not in values_by_node:
@@ -587,7 +663,12 @@ def aggregate_contact_values(
                     values_by_node[node_label], contact_value
                 )
 
-    return values_by_node, counts_by_node, sorted(set(source_names))
+    return (
+        values_by_node,
+        counts_by_node,
+        sorted(set(source_names)),
+        discarded_undefined,
+    )
 
 
 def ordered_path_nodes(path_information):
@@ -701,6 +782,8 @@ def contact_curves(path_information, extracted_frames, variable_name):
         unused_copen_counts,
         unused_cpress_sources,
         unused_copen_sources,
+        unused_cpress_discarded,
+        unused_copen_discarded,
     ) in extracted_frames:
         values_by_node = (
             cpress_values if variable_name == "CPRESS" else copen_values
@@ -1075,6 +1158,7 @@ def write_report(
     requested_steps,
     step_range,
     frame_index,
+    undefined_value_limit,
     start_node,
     start_node_set,
 ):
@@ -1121,8 +1205,8 @@ def write_report(
         )
         if not path_information:
             raise ValueError(
-                "The selected PIPE elements contain no nodes on the "
-                "supported PIPE path."
+                "The selected elements contain no nodes on the supported "
+                "PIPE path."
             )
         allowed_nodes = set(path_information.keys())
 
@@ -1157,23 +1241,25 @@ def write_report(
                 cpress_values,
                 cpress_counts,
                 cpress_sources,
+                cpress_discarded,
             ) = aggregate_contact_values(
                 frame,
                 "CPRESS",
                 instance_key,
                 allowed_nodes,
-                pipe_element_labels,
+                undefined_value_limit,
             )
             (
                 copen_values,
                 copen_counts,
                 copen_sources,
+                copen_discarded,
             ) = aggregate_contact_values(
                 frame,
                 "COPEN",
                 instance_key,
                 allowed_nodes,
-                pipe_element_labels,
+                undefined_value_limit,
             )
             extracted_frames.append(
                 (
@@ -1186,6 +1272,8 @@ def write_report(
                     copen_counts,
                     cpress_sources,
                     copen_sources,
+                    cpress_discarded,
+                    copen_discarded,
                 )
             )
 
@@ -1209,11 +1297,19 @@ def write_report(
             report_file.write(
                 "Element selection: {0}\n".format(element_selection)
             )
-            report_file.write(
-                "Selected PIPE elements: {0} of {1}\n".format(
-                    len(pipe_element_labels), total_pipe_elements
+            if total_pipe_elements is None:
+                report_file.write(
+                    "Selected output elements: {0} "
+                    "(element types trusted; not checked)\n".format(
+                        len(pipe_element_labels)
+                    )
                 )
-            )
+            else:
+                report_file.write(
+                    "Selected PIPE elements: {0} of {1}\n".format(
+                        len(pipe_element_labels), total_pipe_elements
+                    )
+                )
             report_file.write(
                 "Selected PIPE-path nodes: {0}\n".format(
                     len(path_information)
@@ -1227,6 +1323,15 @@ def write_report(
             )
             report_file.write(
                 "Missing contact output: blank (not assumed to be zero)\n"
+            )
+            report_file.write(
+                "Contact filtering: PIPE-path node membership; contact "
+                "element labels are not compared with PIPE labels\n"
+            )
+            report_file.write(
+                "Undefined-value filter: abs(value) >= {0} is blank\n".format(
+                    common.engineering_format(undefined_value_limit)
+                )
             )
             report_file.write(
                 "Path distance: cumulative distance along the complete "
@@ -1250,6 +1355,8 @@ def write_report(
                     copen_counts,
                     cpress_sources,
                     copen_sources,
+                    cpress_discarded,
+                    copen_discarded,
                 ) = extracted
                 report_file.write("Source 1\n")
                 report_file.write("---------\n\n")
@@ -1280,6 +1387,13 @@ def write_report(
                         len(copen_values), len(allowed_nodes)
                     )
                 )
+                if cpress_discarded or copen_discarded:
+                    report_file.write(
+                        "   Undefined/non-finite values discarded: "
+                        "CPRESS={0}, COPEN={1}\n\n".format(
+                            cpress_discarded, copen_discarded
+                        )
+                    )
                 write_frame_table(
                     report_file,
                     path_information,
@@ -1316,6 +1430,15 @@ def write_report(
             print("Path note: {0}.".format(note))
         for note in element_selection_notes:
             print("Element selection: {0}.".format(note))
+        total_cpress_discarded = sum(item[9] for item in extracted_frames)
+        total_copen_discarded = sum(item[10] for item in extracted_frames)
+        if total_cpress_discarded or total_copen_discarded:
+            print(
+                "Undefined/non-finite values discarded: "
+                "CPRESS={0}, COPEN={1}".format(
+                    total_cpress_discarded, total_copen_discarded
+                )
+            )
         print("Wrote:      {0}".format(report_path))
         print("Excel plot: {0}".format(excel_path))
     finally:
@@ -1356,11 +1479,9 @@ def print_element_sets(odb_path, instance_name):
             return
 
         instance = odb.rootAssembly.instances[instance_key]
-        instance_labels = set()
         pipe_labels = set()
         for element in instance.elements:
             label = int(element.label)
-            instance_labels.add(label)
             if str(element.type).upper().startswith("PIPE"):
                 pipe_labels.add(label)
         instance_set_names = sorted(instance.elementSets.keys())
@@ -1368,38 +1489,43 @@ def print_element_sets(odb_path, instance_name):
 
         print("  Instance: {0}".format(instance_key))
         print("  Total PIPE elements: {0}".format(len(pipe_labels)))
-        if not instance_set_names and not assembly_set_names:
-            print("  (no element sets)")
         sys.stdout.flush()
 
+        listed_count = 0
         for set_name in instance_set_names:
-            labels = element_set_labels_for_instance(
+            pipe_labels_in_set = element_set_labels_for_instance(
                 instance.elementSets[set_name],
                 instance,
-                instance_labels,
+                pipe_labels,
             )
+            if not pipe_labels_in_set:
+                continue
             print(
-                "  {0:>8}  {1}  elements={2}, PIPE={3}".format(
+                "  {0:>8}  {1}  PIPE elements={2}".format(
                     "instance",
                     set_name,
-                    len(labels),
-                    sum(1 for label in labels if label in pipe_labels),
+                    len(pipe_labels_in_set),
                 )
             )
+            listed_count += 1
         for set_name in assembly_set_names:
-            labels = element_set_labels_for_instance(
+            pipe_labels_in_set = element_set_labels_for_instance(
                 odb.rootAssembly.elementSets[set_name],
                 instance,
-                instance_labels,
+                pipe_labels,
             )
+            if not pipe_labels_in_set:
+                continue
             print(
-                "  {0:>8}  {1}  elements={2}, PIPE={3}".format(
+                "  {0:>8}  {1}  PIPE elements={2}".format(
                     "assembly",
                     set_name,
-                    len(labels),
-                    sum(1 for label in labels if label in pipe_labels),
+                    len(pipe_labels_in_set),
                 )
             )
+            listed_count += 1
+        if not listed_count:
+            print("  (no element sets containing PIPE* elements)")
     finally:
         if odb is not None:
             odb.close()
@@ -1467,6 +1593,7 @@ def main():
                 requested_steps=args.steps,
                 step_range=args.step_range,
                 frame_index=args.frame_index,
+                undefined_value_limit=args.undefined_value_limit,
                 start_node=args.start_node,
                 start_node_set=args.start_node_set,
             )
