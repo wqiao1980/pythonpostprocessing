@@ -15,3 +15,4 @@ Abaqus License Manager checked out the following license(s):
 Exit code: 2
 Abaqus Error: viewer exited with an error.
 Abaqus Error: Abaqus/Viewer exited with an error
+abaqus viewer noGUI="C:\Data\BPTiberFL6\00_TestCode\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" > "C:\Data\BPTiberFL6\02_Results\u2_console.txt" 2>&1
