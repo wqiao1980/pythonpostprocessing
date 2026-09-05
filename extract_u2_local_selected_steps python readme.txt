@@ -281,6 +281,15 @@ Troubleshooting
    option at sys.argv[0]. Use the current script, which accepts both known
    Abaqus Viewer argument layouts. The current console output begins with:
 
-   extract_u2_local_selected_steps.py version 2026-09-04-r2
+   extract_u2_local_selected_steps.py version 2026-09-05-r3
 
    It then prints the script arguments received from Viewer.
+
+7. Viewer reports exit code 1 but hides the Python traceback
+
+   The current script writes complete diagnostics directly to:
+
+   extract_u2_local_selected_steps.log
+
+   This file is placed in --output-dir. Open or share this log to identify the
+   exact ODB and Abaqus API call that failed.

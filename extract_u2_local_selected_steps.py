@@ -87,7 +87,7 @@ DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
 FIELD_NAME = "U"
 COMPONENT_NAME = "U2"
-SCRIPT_VERSION = "2026-09-04-r2"
+SCRIPT_VERSION = "2026-09-05-r3"
 
 
 def command_line_arguments():
@@ -964,6 +964,32 @@ def print_steps(odb_path):
             odb.close()
 
 
+def write_execution_log(log_path, input_dir, output_dir, jobs, failures):
+    """Persist diagnostics because some Viewer releases hide caught output."""
+    with open(log_path, "w") as log_file:
+        log_file.write(
+            "extract_u2_local_selected_steps.py version {0}\n".format(
+                SCRIPT_VERSION
+            )
+        )
+        log_file.write("Time: {0}\n".format(datetime.datetime.now()))
+        log_file.write("sys.argv: {0}\n".format(repr(sys.argv)))
+        log_file.write("Input directory: {0}\n".format(input_dir))
+        log_file.write("Output directory: {0}\n".format(output_dir))
+        log_file.write("ODB jobs: {0}\n\n".format(len(jobs)))
+        if not failures:
+            log_file.write("Completed without errors.\n")
+            return
+        log_file.write("Failures: {0}\n".format(len(failures)))
+        for odb_path, message, traceback_text in failures:
+            log_file.write("\n" + "=" * 80 + "\n")
+            log_file.write("ODB: {0}\n".format(odb_path))
+            log_file.write("Error: {0}\n\n".format(message))
+            log_file.write(traceback_text)
+            if not traceback_text.endswith("\n"):
+                log_file.write("\n")
+
+
 def main():
     print("extract_u2_local_selected_steps.py version {0}".format(SCRIPT_VERSION))
     sys.stdout.flush()
@@ -996,11 +1022,18 @@ def main():
                 start_node_set=args.start_node_set,
             )
         except Exception as exc:
-            failures.append((odb_path, str(exc)))
+            traceback_text = traceback.format_exc()
+            failures.append((odb_path, str(exc), traceback_text))
             print("FAILED:  {0}".format(odb_path))
             print("         {0}".format(exc))
-            traceback.print_exc()
+            print(traceback_text)
 
+    log_path = os.path.join(
+        output_dir, "extract_u2_local_selected_steps.log"
+    )
+    write_execution_log(
+        log_path, input_dir, output_dir, jobs, failures
+    )
     print(
         "Completed: {0} succeeded, {1} failed.".format(
             len(jobs) - len(failures), len(failures)
@@ -1008,9 +1041,13 @@ def main():
     )
     if failures:
         print("Failed ODB files:")
-        for odb_path, message in failures:
+        for odb_path, message, unused_traceback in failures:
             print("  {0}: {1}".format(odb_path, message))
-        return 1
+        raise RuntimeError(
+            "{0} ODB extraction(s) failed. Full diagnostics: {1}".format(
+                len(failures), log_path
+            )
+        )
     return 0
 
 
