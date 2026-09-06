@@ -13,7 +13,8 @@ extract_esf1_water_depth_pipe31h_path.py outputs:
 
 The path runs from one start node to one end node through connected PIPE31H
 elements. The script is self-contained and does not require any other Python
-script.
+script. Version 2026-09-05-r2 also creates an Excel workbook with native,
+editable ESF1 and water-depth charts.
 
 
 Default behavior
@@ -178,9 +179,10 @@ Use a particular zero-based frame index:
 Output files
 ------------
 
-For each ODB, the default report name is:
+For each ODB, the default output names are:
 
 model.odb -> model_PIPE31H_ESF1_WATER_DEPTH_PATH.rpt
+model.odb -> model_PIPE31H_ESF1_WATER_DEPTH_PATH.xlsx
 
 The table contains one ESF1 column per selected step. A blank ESF1 cell means
 that no selected element-nodal value was available at that node and frame.
@@ -189,6 +191,32 @@ Reports are written beside the ODB unless --output-dir is supplied. For a
 single --odb run, use a custom report name with:
 
 --output-name "custom_esf1_depth.rpt"
+
+The Excel workbook keeps its ODB-based filename when --output-name is used.
+Existing .rpt and .xlsx outputs from this script with the same names are
+overwritten.
+
+
+Excel workbook and plots
+------------------------
+
+The Excel workbook contains a Path Data worksheet with:
+
+- Path Distance;
+- Node Label;
+- Water Depth Z; and
+- one ESF1 column for every selected step.
+
+It contains two native Excel scatter charts:
+
+1. ESF1 versus Path Distance, with one curve for every selected step.
+2. Water Depth Z versus Path Distance.
+
+Both charts use the selected element locations while retaining full-route
+distance from the start node. The charts are native Excel objects, so users
+can change their type, colors, line styles, markers, titles, axes, legend,
+size, and layout. Excel does not need to be installed or open while Abaqus
+creates the workbook.
 
 
 Diagnostic log and console capture

@@ -5,7 +5,8 @@ from __future__ import print_function
 The script is self-contained and runs with ``abaqus python``. By default it
 processes every step and every PIPE31H element on the resolved start-to-end
 route. Element sets, exact element labels, and inclusive label ranges may be
-used to restrict output without resetting the full-route path distance.
+used to restrict output without resetting the full-route path distance. It
+creates a text report and an Excel workbook with native, editable charts.
 """
 
 import argparse
@@ -15,13 +16,14 @@ import math
 import os
 import sys
 import traceback
+import zipfile
 
 from abaqusConstants import ELEMENT_NODAL, ON
 from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-05-r1"
+SCRIPT_VERSION = "2026-09-05-r2"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_ELEMENT_TYPE = "PIPE31H"
 DEFAULT_FRAME_INDEX = -1
@@ -234,24 +236,41 @@ def default_report_name(odb_path):
     return stem + "_PIPE31H_ESF1_WATER_DEPTH_PATH.rpt"
 
 
+def default_excel_name(odb_path):
+    stem = os.path.splitext(os.path.basename(odb_path))[0]
+    return stem + "_PIPE31H_ESF1_WATER_DEPTH_PATH.xlsx"
+
+
 def build_jobs(odb_paths, output_dir, output_name):
     jobs = []
-    paths_seen = set()
+    report_paths_seen = set()
+    excel_paths_seen = set()
     for odb_path in odb_paths:
         report_path = os.path.abspath(
             os.path.join(
                 output_dir, output_name or default_report_name(odb_path)
             )
         )
-        key = os.path.normcase(report_path)
-        if key in paths_seen:
+        excel_path = os.path.abspath(
+            os.path.join(output_dir, default_excel_name(odb_path))
+        )
+        report_key = os.path.normcase(report_path)
+        excel_key = os.path.normcase(excel_path)
+        if report_key in report_paths_seen:
             raise ValueError(
                 "More than one ODB maps to report path: {0}".format(
                     report_path
                 )
             )
-        paths_seen.add(key)
-        jobs.append((odb_path, report_path))
+        if excel_key in excel_paths_seen:
+            raise ValueError(
+                "More than one ODB maps to Excel path: {0}".format(
+                    excel_path
+                )
+            )
+        report_paths_seen.add(report_key)
+        excel_paths_seen.add(excel_key)
+        jobs.append((odb_path, report_path, excel_path))
     return jobs
 
 
@@ -965,6 +984,455 @@ def engineering_format(value):
     return "{0}E{1:+03d}".format(mantissa_text, exponent)
 
 
+EXCEL_CHART_COLORS = (
+    "4472C4",
+    "ED7D31",
+    "70AD47",
+    "A5A5A5",
+    "FFC000",
+    "5B9BD5",
+    "264478",
+    "9E480E",
+    "43682B",
+    "636363",
+)
+
+
+def xlsx_xml_escape(value):
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def xlsx_bytes(value):
+    return value.encode("utf-8")
+
+
+def excel_column_name(column_number):
+    letters = []
+    while column_number:
+        column_number, remainder = divmod(column_number - 1, 26)
+        letters.append(chr(ord("A") + remainder))
+    return "".join(reversed(letters))
+
+
+def excel_cell_reference(row_number, column_number):
+    return "{0}{1}".format(
+        excel_column_name(column_number), row_number
+    )
+
+
+def xlsx_inline_cell(row_number, column_number, value, style_index=0):
+    reference = excel_cell_reference(row_number, column_number)
+    return (
+        '<c r="{0}" t="inlineStr" s="{1}"><is><t>{2}</t></is></c>'.format(
+            reference, style_index, xlsx_xml_escape(value)
+        )
+    )
+
+
+def xlsx_number_cell(row_number, column_number, value, style_index=0):
+    if value is None or math.isnan(value) or math.isinf(value):
+        return ""
+    reference = excel_cell_reference(row_number, column_number)
+    return '<c r="{0}" s="{1}"><v>{2:.15g}</v></c>'.format(
+        reference, style_index, float(value)
+    )
+
+
+def xlsx_content_types_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+  <Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+  <Override PartName="/xl/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>"""
+
+
+def xlsx_root_relationships_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>"""
+
+
+def xlsx_core_properties_xml():
+    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>Abaqus Python</dc:creator><cp:lastModifiedBy>Abaqus Python</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">{0}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{0}</dcterms:modified>
+  <dc:title>PIPE31H ESF1 and Water Depth Along Path</dc:title>
+</cp:coreProperties>""".format(timestamp)
+
+
+def xlsx_app_properties_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>Abaqus Python</Application><AppVersion>1.0</AppVersion>
+  <HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant><vt:variant><vt:i4>1</vt:i4></vt:variant></vt:vector></HeadingPairs>
+  <TitlesOfParts><vt:vector size="1" baseType="lpstr"><vt:lpstr>Path Data</vt:lpstr></vt:vector></TitlesOfParts>
+</Properties>"""
+
+
+def xlsx_workbook_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <bookViews><workbookView xWindow="0" yWindow="0" windowWidth="24000" windowHeight="12000"/></bookViews>
+  <sheets><sheet name="Path Data" sheetId="1" r:id="rId1"/></sheets>
+  <calcPr calcId="191029" fullCalcOnLoad="1"/>
+</workbook>"""
+
+
+def xlsx_workbook_relationships_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"""
+
+
+def xlsx_styles_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="2"><numFmt numFmtId="164" formatCode="0.0000"/><numFmt numFmtId="165" formatCode="0.000000E+00"/></numFmts>
+  <fonts count="4">
+    <font><sz val="10"/><name val="Arial"/><family val="2"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><sz val="10"/><name val="Arial"/><family val="2"/></font>
+    <font><b/><sz val="14"/><name val="Arial"/><family val="2"/></font>
+    <font><i/><color rgb="FF666666"/><sz val="10"/><name val="Arial"/><family val="2"/></font>
+  </fonts>
+  <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/><bgColor indexed="64"/></patternFill></fill></fills>
+  <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFD9E2F3"/></left><right style="thin"><color rgb="FFD9E2F3"/></right><top style="thin"><color rgb="FFD9E2F3"/></top><bottom style="thin"><color rgb="FFD9E2F3"/></bottom><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="6">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+
+
+def xlsx_worksheet_xml(
+    odb_name, output_nodes, route_distances, coordinates, extracted_frames
+):
+    last_column = 3 + len(extracted_frames)
+    last_row = 4 + len(output_nodes)
+    rows = [
+        '<row r="1" ht="22" customHeight="1">{0}</row>'.format(
+            xlsx_inline_cell(
+                1,
+                1,
+                "PIPE31H ESF1 and Water Depth Along Path - {0}".format(
+                    odb_name
+                ),
+                1,
+            )
+        ),
+        '<row r="2">{0}</row>'.format(
+            xlsx_inline_cell(
+                2,
+                1,
+                "Water Depth Z is original ODB coordinate Z; charts are native and editable in Excel",
+                2,
+            )
+        ),
+    ]
+    headers = [
+        xlsx_inline_cell(4, 1, "Path Distance", 3),
+        xlsx_inline_cell(4, 2, "Node Label", 3),
+        xlsx_inline_cell(4, 3, "Water Depth Z", 3),
+    ]
+    for column_number, extracted in enumerate(extracted_frames, 4):
+        headers.append(
+            xlsx_inline_cell(
+                4, column_number, extracted[0] + " ESF1", 3
+            )
+        )
+    rows.append(
+        '<row r="4" ht="30" customHeight="1">{0}</row>'.format(
+            "".join(headers)
+        )
+    )
+    for row_number, node_label in enumerate(output_nodes, 5):
+        cells = [
+            xlsx_number_cell(
+                row_number, 1, route_distances[node_label], 4
+            ),
+            xlsx_number_cell(row_number, 2, node_label, 0),
+            xlsx_number_cell(
+                row_number, 3, coordinates[node_label][2], 4
+            ),
+        ]
+        for column_number, extracted in enumerate(extracted_frames, 4):
+            values_by_node = extracted[3]
+            cells.append(
+                xlsx_number_cell(
+                    row_number,
+                    column_number,
+                    values_by_node.get(node_label),
+                    5,
+                )
+            )
+        rows.append(
+            '<row r="{0}">{1}</row>'.format(
+                row_number, "".join(cells)
+            )
+        )
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:{0}{1}"/>
+  <sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="15"/>
+  <cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="13" customWidth="1"/><col min="3" max="3" width="17" customWidth="1"/><col min="4" max="{2}" width="20" customWidth="1"/></cols>
+  <sheetData>{3}</sheetData><autoFilter ref="A4:{0}{1}"/><drawing r:id="rId1"/>
+</worksheet>""".format(
+        excel_column_name(last_column),
+        last_row,
+        last_column,
+        "".join(rows),
+    )
+
+
+def xlsx_worksheet_relationships_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"""
+
+
+def xlsx_drawing_xml(start_column):
+    end_column = start_column + 12
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor><xdr:from><xdr:col>{0}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>{1}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>23</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="ESF1 Chart"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>
+  <xdr:twoCellAnchor><xdr:from><xdr:col>{0}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>25</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>{1}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>49</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="3" name="Water Depth Chart"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId2"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>
+</xdr:wsDr>""".format(start_column, end_column)
+
+
+def xlsx_drawing_relationships_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
+</Relationships>"""
+
+
+def xlsx_numeric_cache(values):
+    points = []
+    for index, value in enumerate(values):
+        if value is not None and not math.isnan(value) and not math.isinf(value):
+            points.append(
+                '<c:pt idx="{0}"><c:v>{1:.15g}</c:v></c:pt>'.format(
+                    index, float(value)
+                )
+            )
+    return '<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="{0}"/>{1}</c:numCache>'.format(
+        len(values), "".join(points)
+    )
+
+
+def xlsx_chart_text(text, font_size):
+    return """<c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="{0}" b="0"/><a:t>{1}</a:t></a:r></a:p></c:rich></c:tx>""".format(
+        font_size, xlsx_xml_escape(text)
+    )
+
+
+def xlsx_chart_series_xml(
+    series_index,
+    name,
+    value_column,
+    output_nodes,
+    route_distances,
+    values_by_node,
+):
+    data_start_row = 5
+    data_end_row = 4 + len(output_nodes)
+    column_letter = excel_column_name(value_column)
+    x_values = [route_distances[label] for label in output_nodes]
+    y_values = [values_by_node.get(label) for label in output_nodes]
+    color = EXCEL_CHART_COLORS[
+        series_index % len(EXCEL_CHART_COLORS)
+    ]
+    return """<c:ser>
+  <c:idx val="{0}"/><c:order val="{0}"/>
+  <c:tx><c:strRef><c:f>'Path Data'!${1}$4</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>{2}</c:v></c:pt></c:strCache></c:strRef></c:tx>
+  <c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="{3}"/></a:solidFill></a:ln></c:spPr>
+  <c:marker><c:symbol val="circle"/><c:size val="4"/><c:spPr><a:solidFill><a:srgbClr val="{3}"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="{3}"/></a:solidFill></a:ln></c:spPr></c:marker>
+  <c:xVal><c:numRef><c:f>'Path Data'!$A${4}:$A${5}</c:f>{6}</c:numRef></c:xVal>
+  <c:yVal><c:numRef><c:f>'Path Data'!${1}${4}:${1}${5}</c:f>{7}</c:numRef></c:yVal><c:smooth val="0"/>
+</c:ser>""".format(
+        series_index,
+        column_letter,
+        xlsx_xml_escape(name),
+        color,
+        data_start_row,
+        data_end_row,
+        xlsx_numeric_cache(x_values),
+        xlsx_numeric_cache(y_values),
+    )
+
+
+def xlsx_value_axis_xml(
+    axis_id, cross_axis_id, position, title, number_format
+):
+    return """<c:valAx><c:axId val="{0}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{1}"/><c:title>{2}<c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="{3}" sourceLinked="0"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:solidFill><a:srgbClr val="666666"/></a:solidFill></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:crossAx val="{4}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>""".format(
+        axis_id,
+        position,
+        xlsx_chart_text(title, 1000),
+        xlsx_xml_escape(number_format),
+        cross_axis_id,
+    )
+
+
+def xlsx_chart_xml(title, y_title, series_xml, x_axis_id, y_axis_id):
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <c:date1904 val="0"/><c:lang val="en-US"/><c:roundedCorners val="0"/><c:style val="10"/>
+  <c:chart><c:title>{0}<c:layout/><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/><c:plotArea><c:layout/><c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>{1}<c:axId val="{2}"/><c:axId val="{3}"/></c:scatterChart>{4}{5}</c:plotArea><c:legend><c:legendPos val="r"/><c:layout/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/><c:showDLblsOverMax val="0"/></c:chart>
+  <c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings>
+</c:chartSpace>""".format(
+        xlsx_chart_text(title, 1200),
+        series_xml,
+        x_axis_id,
+        y_axis_id,
+        xlsx_value_axis_xml(
+            x_axis_id, y_axis_id, "b", "Path Distance", "0.0000"
+        ),
+        xlsx_value_axis_xml(
+            y_axis_id, x_axis_id, "l", y_title, "0.000000E+00"
+        ),
+    )
+
+
+def write_excel_workbook(
+    excel_path,
+    odb_name,
+    output_nodes,
+    route_distances,
+    coordinates,
+    extracted_frames,
+):
+    esf_series = []
+    for series_index, extracted in enumerate(extracted_frames):
+        step_name = extracted[0]
+        values_by_node = extracted[3]
+        esf_series.append(
+            xlsx_chart_series_xml(
+                series_index,
+                step_name + " ESF1",
+                4 + series_index,
+                output_nodes,
+                route_distances,
+                values_by_node,
+            )
+        )
+    water_values = dict(
+        (label, coordinates[label][2]) for label in output_nodes
+    )
+    water_series = xlsx_chart_series_xml(
+        0,
+        "Water Depth Z",
+        3,
+        output_nodes,
+        route_distances,
+        water_values,
+    )
+    start_column = 4 + len(extracted_frames)
+
+    with zipfile.ZipFile(excel_path, "w", zipfile.ZIP_DEFLATED) as workbook:
+        workbook.writestr(
+            "[Content_Types].xml", xlsx_bytes(xlsx_content_types_xml())
+        )
+        workbook.writestr(
+            "_rels/.rels", xlsx_bytes(xlsx_root_relationships_xml())
+        )
+        workbook.writestr(
+            "docProps/core.xml", xlsx_bytes(xlsx_core_properties_xml())
+        )
+        workbook.writestr(
+            "docProps/app.xml", xlsx_bytes(xlsx_app_properties_xml())
+        )
+        workbook.writestr(
+            "xl/workbook.xml", xlsx_bytes(xlsx_workbook_xml())
+        )
+        workbook.writestr(
+            "xl/_rels/workbook.xml.rels",
+            xlsx_bytes(xlsx_workbook_relationships_xml()),
+        )
+        workbook.writestr(
+            "xl/styles.xml", xlsx_bytes(xlsx_styles_xml())
+        )
+        workbook.writestr(
+            "xl/worksheets/sheet1.xml",
+            xlsx_bytes(
+                xlsx_worksheet_xml(
+                    odb_name,
+                    output_nodes,
+                    route_distances,
+                    coordinates,
+                    extracted_frames,
+                )
+            ),
+        )
+        workbook.writestr(
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            xlsx_bytes(xlsx_worksheet_relationships_xml()),
+        )
+        workbook.writestr(
+            "xl/drawings/drawing1.xml",
+            xlsx_bytes(xlsx_drawing_xml(start_column)),
+        )
+        workbook.writestr(
+            "xl/drawings/_rels/drawing1.xml.rels",
+            xlsx_bytes(xlsx_drawing_relationships_xml()),
+        )
+        workbook.writestr(
+            "xl/charts/chart1.xml",
+            xlsx_bytes(
+                xlsx_chart_xml(
+                    "ESF1 Along PIPE31H Path - {0}".format(odb_name),
+                    "ESF1 (model force units)",
+                    "".join(esf_series),
+                    78650112,
+                    78650113,
+                )
+            ),
+        )
+        workbook.writestr(
+            "xl/charts/chart2.xml",
+            xlsx_bytes(
+                xlsx_chart_xml(
+                    "Water Depth Z Along PIPE31H Path - {0}".format(
+                        odb_name
+                    ),
+                    "Water Depth Z (model length units)",
+                    water_series,
+                    78650114,
+                    78650115,
+                )
+            ),
+        )
+
+
 def write_table(
     report_file,
     output_nodes,
@@ -1063,6 +1531,7 @@ def write_summaries(report_file, route_distances, extracted_frames):
 def write_report(
     odb_path,
     report_path,
+    excel_path,
     instance_name,
     requested_sets,
     requested_elements,
@@ -1264,6 +1733,16 @@ def write_report(
                 report_file, route_distances, extracted_frames
             )
 
+        odb_stem = os.path.splitext(os.path.basename(odb_path))[0]
+        write_excel_workbook(
+            excel_path,
+            odb_stem,
+            output_nodes,
+            route_distances,
+            coordinates,
+            extracted_frames,
+        )
+
         print(
             "Path: node {0} to node {1}, distance {2}".format(
                 start_label,
@@ -1295,6 +1774,7 @@ def write_report(
                 )
             )
         print("Wrote: {0}".format(report_path))
+        print("Excel: {0}".format(excel_path))
     finally:
         if odb is not None:
             odb.close()
@@ -1442,11 +1922,12 @@ def main():
         os.makedirs(output_dir)
     jobs = build_jobs(odb_paths, output_dir, args.output_name)
     failures = []
-    for odb_path, report_path in jobs:
+    for odb_path, report_path, excel_path in jobs:
         try:
             write_report(
                 odb_path=odb_path,
                 report_path=report_path,
+                excel_path=excel_path,
                 instance_name=args.instance,
                 requested_sets=args.element_set,
                 requested_elements=args.element,
