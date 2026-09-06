@@ -258,6 +258,11 @@ Example verbose run:
 
 abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" --pipe-element-set "PIPE_SET" --connector-element-set "CONNECTOR_SET" --spring-element-set "SPRING_SET" --verbose
 
+Even in verbose mode, detailed exceptions and lists of available element sets
+are not printed to the screen. If an element-set name is incorrect, the screen
+shows only that the ODB failed and the diagnostic log location. The log records
+the incorrect name, traceback, and complete list of available element sets.
+
 The explicit --list-steps and --list-element-sets commands still print their
 requested lists to the screen. They do not perform result extraction.
 
@@ -283,18 +288,25 @@ Troubleshooting
    Supply that label under the correct --pipe-element, --connector-element, or
    --spring-element option. Run --list-element-sets to inspect suitable sets.
 
-3. The CTF1 + S11 chart is empty
+3. An element-set name is incorrect
+
+   Open extract_pipe_connector_spring_history.log. The error entry contains the
+   requested name and all available instance- and assembly-level element-set
+   names. They are intentionally not printed during extraction, including when
+   --verbose is used.
+
+4. The CTF1 + S11 chart is empty
 
    Confirm that both connector and spring elements were selected and that their
    connectivity has exactly one common node. Pair details are written into the
    text report.
 
-4. A sum has the unexpected sign
+5. A sum has the unexpected sign
 
    Inspect the local-1 directions and sign conventions of both elements. The
    script adds reported CTF1 and S11 directly and does not reorient them.
 
-5. A step has blank rows
+6. A step has blank rows
 
    All frames of selected steps are retained for a continuous history. A frame
    can therefore be present even when one or more requested fields are absent.

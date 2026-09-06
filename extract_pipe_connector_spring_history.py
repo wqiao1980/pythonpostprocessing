@@ -19,7 +19,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r2"
+SCRIPT_VERSION = "2026-09-06-r3"
 DEFAULT_INSTANCE = "PART-1-1"
 VARIABLES = ("ESF1", "CTF1", "S11", "E11")
 PARENT_FIELDS = {
@@ -1438,8 +1438,6 @@ def main():
             failures.append((odb_path, str(exc), traceback_text))
             if args.verbose:
                 print("FAILED: {0}".format(odb_path))
-                print("        {0}".format(exc))
-                print(traceback_text)
     log_path = os.path.join(
         output_dir, "extract_pipe_connector_spring_history.log"
     )
