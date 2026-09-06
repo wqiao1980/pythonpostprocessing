@@ -1,12 +1,13 @@
 from __future__ import print_function
 
-"""Extract ESF1 and original nodal Z along a PIPE31H start-to-end path.
+"""Extract ESF1 and final as-laid water depth along a PIPE31H path.
 
 The script is self-contained and runs with ``abaqus python``. By default it
 processes every step and every PIPE31H element on the resolved start-to-end
 route. Element sets, exact element labels, and inclusive label ranges may be
 used to restrict output without resetting the full-route path distance. It
 creates a text report and an Excel workbook with native, editable charts.
+Water depth is Z in the final frame of the user-selected as-laid step.
 """
 
 import argparse
@@ -23,7 +24,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-05-r2"
+SCRIPT_VERSION = "2026-09-05-r3"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_ELEMENT_TYPE = "PIPE31H"
 DEFAULT_FRAME_INDEX = -1
@@ -32,7 +33,7 @@ DEFAULT_FRAME_INDEX = -1
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description=(
-            "Write ESF1 and water depth (original nodal Z) along the "
+            "Write ESF1 and final as-laid water depth Z along the "
             "PIPE31H path from a start node to an end node."
         )
     )
@@ -125,6 +126,15 @@ def parse_arguments():
         help=(
             "Exact instance node-set name for the end. If omitted, a unique "
             "set name containing END is detected automatically."
+        ),
+    )
+    parser.add_argument(
+        "--aslaid-step",
+        default=None,
+        metavar="STEP",
+        help=(
+            "Required for extraction: exact as-laid step name or 1-based "
+            "step position. Water Depth Z is taken from its final frame."
         ),
     )
     parser.add_argument(
@@ -872,6 +882,139 @@ def select_steps(available_steps, requested_steps, step_range):
     return available_steps[start_index : end_index + 1], []
 
 
+def resolve_aslaid_step(available_steps, requested_step):
+    if requested_step is None:
+        raise ValueError(
+            "--aslaid-step is required for extraction. Supply the exact "
+            "as-laid step name or its 1-based step position."
+        )
+    step_number = integer_value(str(requested_step))
+    if step_number is not None:
+        if step_number < 1 or step_number > len(available_steps):
+            raise ValueError(
+                "--aslaid-step position {0} is outside the available range "
+                "1-{1}.".format(step_number, len(available_steps))
+            )
+        return available_steps[step_number - 1]
+    step_name = find_step_name(available_steps, requested_step)
+    if step_name is None:
+        raise ValueError(
+            "As-laid step '{0}' was not found. Available steps: {1}".format(
+                requested_step, ", ".join(available_steps)
+            )
+        )
+    return step_name
+
+
+def field_vector_data(value):
+    try:
+        data = value.data
+    except Exception:
+        data = value.dataDouble
+    if isinstance(data, (int, float)):
+        return (float(data),)
+    return tuple(float(item) for item in data)
+
+
+def nodal_vectors(field_output, instance_name, requested_nodes):
+    target_nodes = set(requested_nodes)
+    contributions = dict((label, []) for label in requested_nodes)
+    for value in field_output.values:
+        try:
+            node_label = int(value.nodeLabel)
+        except Exception:
+            continue
+        if node_label not in target_nodes:
+            continue
+        value_instance = getattr(value, "instance", None)
+        if (
+            value_instance is not None
+            and value_instance.name.upper() != instance_name.upper()
+        ):
+            continue
+        vector = field_vector_data(value)
+        if len(vector) >= 3:
+            contributions[node_label].append(vector)
+
+    averaged = {}
+    for node_label, vectors in contributions.items():
+        if not vectors:
+            continue
+        averaged[node_label] = tuple(
+            sum(vector[index] for vector in vectors) / float(len(vectors))
+            for index in range(3)
+        )
+    return averaged
+
+
+def final_aslaid_water_depths(
+    odb,
+    aslaid_step_name,
+    instance_name,
+    output_nodes,
+    initial_coordinates,
+):
+    frames = odb.steps[aslaid_step_name].frames
+    if not frames:
+        raise ValueError(
+            "As-laid step '{0}' contains no frames.".format(
+                aslaid_step_name
+            )
+        )
+    final_frame_index = len(frames) - 1
+    final_frame = frames[final_frame_index]
+    coordinate_vectors = {}
+    displacement_vectors = {}
+    coord_key = repository_key(final_frame.fieldOutputs, "COORD")
+    if coord_key is not None:
+        coordinate_vectors = nodal_vectors(
+            final_frame.fieldOutputs[coord_key], instance_name, output_nodes
+        )
+    u_key = repository_key(final_frame.fieldOutputs, "U")
+    if u_key is not None:
+        displacement_vectors = nodal_vectors(
+            final_frame.fieldOutputs[u_key], instance_name, output_nodes
+        )
+
+    water_depths = {}
+    coord_count = 0
+    displacement_count = 0
+    missing = []
+    for node_label in output_nodes:
+        if node_label in coordinate_vectors:
+            water_depths[node_label] = coordinate_vectors[node_label][2]
+            coord_count += 1
+        elif node_label in displacement_vectors:
+            water_depths[node_label] = (
+                initial_coordinates[node_label][2]
+                + displacement_vectors[node_label][2]
+            )
+            displacement_count += 1
+        else:
+            missing.append(node_label)
+    if missing:
+        raise ValueError(
+            "Final frame of as-laid step '{0}' has neither COORD3 nor U3 "
+            "for {1} output node(s), beginning with: {2}".format(
+                aslaid_step_name,
+                len(missing),
+                ", ".join(str(label) for label in missing[:20]),
+            )
+        )
+    if coord_count and displacement_count:
+        source = "COORD3 with initial Z + U3 fallback"
+    elif coord_count:
+        source = "COORD3"
+    else:
+        source = "initial Z + U3"
+    return (
+        water_depths,
+        source,
+        final_frame_index,
+        final_frame.description,
+    )
+
+
 def select_frames(odb, selected_steps, frame_index):
     selected = []
     skipped = []
@@ -1132,7 +1275,12 @@ def xlsx_styles_xml():
 
 
 def xlsx_worksheet_xml(
-    odb_name, output_nodes, route_distances, coordinates, extracted_frames
+    odb_name,
+    output_nodes,
+    route_distances,
+    water_depths,
+    aslaid_step_name,
+    extracted_frames,
 ):
     last_column = 3 + len(extracted_frames)
     last_row = 4 + len(output_nodes)
@@ -1151,7 +1299,9 @@ def xlsx_worksheet_xml(
             xlsx_inline_cell(
                 2,
                 1,
-                "Water Depth Z is original ODB coordinate Z; charts are native and editable in Excel",
+                "Water Depth Z is from the final frame of as-laid step {0}; charts are native and editable in Excel".format(
+                    aslaid_step_name
+                ),
                 2,
             )
         ),
@@ -1159,7 +1309,12 @@ def xlsx_worksheet_xml(
     headers = [
         xlsx_inline_cell(4, 1, "Path Distance", 3),
         xlsx_inline_cell(4, 2, "Node Label", 3),
-        xlsx_inline_cell(4, 3, "Water Depth Z", 3),
+        xlsx_inline_cell(
+            4,
+            3,
+            "Water Depth Z ({0}, final)".format(aslaid_step_name),
+            3,
+        ),
     ]
     for column_number, extracted in enumerate(extracted_frames, 4):
         headers.append(
@@ -1179,7 +1334,7 @@ def xlsx_worksheet_xml(
             ),
             xlsx_number_cell(row_number, 2, node_label, 0),
             xlsx_number_cell(
-                row_number, 3, coordinates[node_label][2], 4
+                row_number, 3, water_depths[node_label], 4
             ),
         ]
         for column_number, extracted in enumerate(extracted_frames, 4):
@@ -1292,14 +1447,22 @@ def xlsx_chart_series_xml(
 
 
 def xlsx_value_axis_xml(
-    axis_id, cross_axis_id, position, title, number_format
+    axis_id,
+    cross_axis_id,
+    position,
+    title,
+    number_format,
+    delete_value=0,
+    crosses="autoZero",
 ):
-    return """<c:valAx><c:axId val="{0}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{1}"/><c:title>{2}<c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="{3}" sourceLinked="0"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:solidFill><a:srgbClr val="666666"/></a:solidFill></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:crossAx val="{4}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>""".format(
+    return """<c:valAx><c:axId val="{0}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="{5}"/><c:axPos val="{1}"/><c:title>{2}<c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="{3}" sourceLinked="0"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:solidFill><a:srgbClr val="666666"/></a:solidFill></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:crossAx val="{4}"/><c:crosses val="{6}"/><c:crossBetween val="midCat"/></c:valAx>""".format(
         axis_id,
         position,
         xlsx_chart_text(title, 1000),
         xlsx_xml_escape(number_format),
         cross_axis_id,
+        delete_value,
+        crosses,
     )
 
 
@@ -1323,12 +1486,72 @@ def xlsx_chart_xml(title, y_title, series_xml, x_axis_id, y_axis_id):
     )
 
 
+def xlsx_combined_esf_water_chart_xml(
+    title, esf_series_xml, water_series_xml
+):
+    primary_x = 78650112
+    primary_y = 78650113
+    secondary_x = 78650116
+    secondary_y = 78650117
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <c:date1904 val="0"/><c:lang val="en-US"/><c:roundedCorners val="0"/><c:style val="10"/>
+  <c:chart><c:title>{0}<c:layout/><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/><c:plotArea><c:layout/>
+    <c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>{1}<c:axId val="{3}"/><c:axId val="{4}"/></c:scatterChart>
+    <c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>{2}<c:axId val="{5}"/><c:axId val="{6}"/></c:scatterChart>
+    {7}{8}{9}{10}
+  </c:plotArea><c:legend><c:legendPos val="r"/><c:layout/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/><c:showDLblsOverMax val="0"/></c:chart>
+  <c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings>
+</c:chartSpace>""".format(
+        xlsx_chart_text(title, 1200),
+        esf_series_xml,
+        water_series_xml,
+        primary_x,
+        primary_y,
+        secondary_x,
+        secondary_y,
+        xlsx_value_axis_xml(
+            primary_x,
+            primary_y,
+            "b",
+            "Path Distance",
+            "0.0000",
+        ),
+        xlsx_value_axis_xml(
+            primary_y,
+            primary_x,
+            "l",
+            "ESF1 (model force units)",
+            "0.000000E+00",
+        ),
+        xlsx_value_axis_xml(
+            secondary_x,
+            secondary_y,
+            "t",
+            "Path Distance",
+            "0.0000",
+            1,
+            "max",
+        ),
+        xlsx_value_axis_xml(
+            secondary_y,
+            secondary_x,
+            "r",
+            "Final As-Laid Water Depth Z (model length units)",
+            "0.000000E+00",
+            0,
+            "max",
+        ),
+    )
+
+
 def write_excel_workbook(
     excel_path,
     odb_name,
     output_nodes,
     route_distances,
-    coordinates,
+    water_depths,
+    aslaid_step_name,
     extracted_frames,
 ):
     esf_series = []
@@ -1346,11 +1569,19 @@ def write_excel_workbook(
             )
         )
     water_values = dict(
-        (label, coordinates[label][2]) for label in output_nodes
+        (label, water_depths[label]) for label in output_nodes
     )
     water_series = xlsx_chart_series_xml(
         0,
-        "Water Depth Z",
+        "Water Depth Z ({0}, final)".format(aslaid_step_name),
+        3,
+        output_nodes,
+        route_distances,
+        water_values,
+    )
+    combined_water_series = xlsx_chart_series_xml(
+        len(extracted_frames),
+        "Water Depth Z ({0}, final)".format(aslaid_step_name),
         3,
         output_nodes,
         route_distances,
@@ -1388,7 +1619,8 @@ def write_excel_workbook(
                     odb_name,
                     output_nodes,
                     route_distances,
-                    coordinates,
+                    water_depths,
+                    aslaid_step_name,
                     extracted_frames,
                 )
             ),
@@ -1408,12 +1640,13 @@ def write_excel_workbook(
         workbook.writestr(
             "xl/charts/chart1.xml",
             xlsx_bytes(
-                xlsx_chart_xml(
-                    "ESF1 Along PIPE31H Path - {0}".format(odb_name),
-                    "ESF1 (model force units)",
+                xlsx_combined_esf_water_chart_xml(
+                    "ESF1 and Final As-Laid Water Depth Along PIPE31H "
+                    "Path - {0} ({1})".format(
+                        odb_name, aslaid_step_name
+                    ),
                     "".join(esf_series),
-                    78650112,
-                    78650113,
+                    combined_water_series,
                 )
             ),
         )
@@ -1421,8 +1654,9 @@ def write_excel_workbook(
             "xl/charts/chart2.xml",
             xlsx_bytes(
                 xlsx_chart_xml(
-                    "Water Depth Z Along PIPE31H Path - {0}".format(
-                        odb_name
+                    "Final As-Laid Water Depth Z Along PIPE31H Path - "
+                    "{0} ({1})".format(
+                        odb_name, aslaid_step_name
                     ),
                     "Water Depth Z (model length units)",
                     water_series,
@@ -1437,7 +1671,7 @@ def write_table(
     report_file,
     output_nodes,
     route_distances,
-    coordinates,
+    water_depths,
     extracted_frames,
 ):
     fixed_widths = (18, 14, 18)
@@ -1464,7 +1698,7 @@ def write_table(
             "{0:>{w0}}{1:>{w1}d}{2:>{w2}}".format(
                 engineering_format(route_distances[node_label]),
                 node_label,
-                engineering_format(coordinates[node_label][2]),
+                engineering_format(water_depths[node_label]),
                 w0=fixed_widths[0],
                 w1=fixed_widths[1],
                 w2=fixed_widths[2],
@@ -1538,6 +1772,7 @@ def write_report(
     requested_ranges,
     requested_steps,
     step_range,
+    requested_aslaid_step,
     frame_index,
     start_node,
     end_node,
@@ -1617,6 +1852,21 @@ def write_report(
         ]
 
         available_steps = list(odb.steps.keys())
+        aslaid_step_name = resolve_aslaid_step(
+            available_steps, requested_aslaid_step
+        )
+        (
+            water_depths,
+            water_depth_source,
+            aslaid_frame_index,
+            aslaid_frame_description,
+        ) = final_aslaid_water_depths(
+            odb,
+            aslaid_step_name,
+            instance_key,
+            output_nodes,
+            coordinates,
+        )
         selected_steps, step_notes = select_steps(
             available_steps, requested_steps, step_range
         )
@@ -1697,8 +1947,18 @@ def write_report(
                 "nodal coordinates\n"
             )
             report_file.write(
-                "Water Depth Z: original ODB nodal coordinate Z; sign and "
-                "model units are unchanged\n"
+                "Water Depth Z: final frame of as-laid step '{0}', frame "
+                "index {1}; source={2}\n".format(
+                    aslaid_step_name,
+                    aslaid_frame_index,
+                    water_depth_source,
+                )
+            )
+            report_file.write(
+                "As-laid frame: {0}\n".format(aslaid_frame_description)
+            )
+            report_file.write(
+                "Water Depth Z sign and model length units are unchanged\n"
             )
             report_file.write(
                 "ESF1: element-nodal values averaged using output elements "
@@ -1726,7 +1986,7 @@ def write_report(
                 report_file,
                 output_nodes,
                 route_distances,
-                coordinates,
+                water_depths,
                 extracted_frames,
             )
             write_summaries(
@@ -1739,7 +1999,8 @@ def write_report(
             odb_stem,
             output_nodes,
             route_distances,
-            coordinates,
+            water_depths,
+            aslaid_step_name,
             extracted_frames,
         )
 
@@ -1753,6 +2014,13 @@ def write_report(
         print(
             "Output: {0} PIPE31H element(s), {1} path node(s)".format(
                 len(output_element_labels), len(output_nodes)
+            )
+        )
+        print(
+            "Water Depth Z: step '{0}', final frame {1}, source {2}".format(
+                aslaid_step_name,
+                aslaid_frame_index,
+                water_depth_source,
             )
         )
         for note in element_notes:
@@ -1934,6 +2202,7 @@ def main():
                 requested_ranges=args.element_range,
                 requested_steps=args.steps,
                 step_range=args.step_range,
+                requested_aslaid_step=args.aslaid_step,
                 frame_index=args.frame_index,
                 start_node=args.start_node,
                 end_node=args.end_node,
