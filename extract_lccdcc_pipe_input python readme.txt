@@ -119,6 +119,19 @@ Inclusive 1-based step positions 3 through 7:
 
 abaqus python extract_lccdcc_pipe_input.py --aslaid-step "As-Laid" --step-range 3 7
 
+Select one result step by its 1-based position by entering the same position
+twice. For example, output only ODB step 7:
+
+abaqus python extract_lccdcc_pipe_input.py --aslaid-step "As-Laid" --step-range 7 7
+
+The as-laid WD step can also be entered by position. For example, use step 4
+for final-frame COORD3 water depth and output results only from step 7:
+
+abaqus python extract_lccdcc_pipe_input.py --aslaid-step 4 --step-range 7 7
+
+In that command, step 4 controls only WD. Step 7 controls ESF1, SE1, THE11,
+SK2, SK1, SM2, and SM1. All step positions are 1-based.
+
 Inclusive range using exact first and last step names:
 
 abaqus python extract_lccdcc_pipe_input.py --aslaid-step "As-Laid" --step-range "Preload" "Operation"
