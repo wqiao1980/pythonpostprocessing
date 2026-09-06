@@ -14,7 +14,9 @@ script. It extracts frame-by-frame histories for user-selected elements:
 - CTF1 + S11 for each selected connector/spring pair sharing exactly one node.
 
 It creates a tab-delimited text report and an Excel workbook with five native,
-editable charts. Abaqus/CAE or Viewer does not need to be opened.
+editable charts. Extraction is quiet by default: the script does not print
+results or progress to the screen. Abaqus/CAE or Viewer does not need to be
+opened.
 
 
 Selection behavior
@@ -37,7 +39,7 @@ Element types are identified by these Abaqus type-name prefixes:
 - SPRING for springs, such as SPRINGA, SPRING1, or SPRING2.
 
 If a selected element set or range also contains other element types, those
-other types are omitted and reported in the console and report. An exact label
+other types are omitted and recorded in the text report. An exact label
 supplied under the wrong family produces an error.
 
 
@@ -159,7 +161,7 @@ NODE 100: CONN 5001 CTF1 + SPRING 7001 S11
 
 If several valid element pairs exist, each pair receives its own column and
 curve. If no pair shares exactly one node, the CTF1 + S11 chart is present but
-empty and a warning is printed.
+empty and this condition is recorded in the text report.
 
 The sum is direct signed addition of the values reported in each element's
 local-1 convention. The script does not reverse either sign or transform local
@@ -236,18 +238,28 @@ All exact labels and element sets are resolved for that instance. Both
 instance-level and assembly-level element sets are supported.
 
 
-Diagnostic log and console capture
-----------------------------------
+Quiet screen output, diagnostic log, and verbose mode
+-----------------------------------------------------
 
-Every extraction run creates:
+Normal extraction commands are quiet. Numeric results are written only to the
+.rpt text report, and plots are written only to the .xlsx Excel workbook.
+Warnings and tracebacks are recorded in:
 
 extract_pipe_connector_spring_history.log
 
-Capture complete console output with:
+The Abaqus command launcher can still display its own license-manager messages;
+those messages are outside this Python script.
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" --pipe-element-set "PIPE_SET" --connector-element-set "CONNECTOR_SET" --spring-element-set "SPRING_SET" > "C:\Data\BPTiberFL6\02_Results\element_history_console.txt" 2>&1
+To display optional progress, output paths, and warning summaries, add:
 
-The > operator overwrites the console file. Use >> to append.
+--verbose
+
+Example verbose run:
+
+abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" --pipe-element-set "PIPE_SET" --connector-element-set "CONNECTOR_SET" --spring-element-set "SPRING_SET" --verbose
+
+The explicit --list-steps and --list-element-sets commands still print their
+requested lists to the screen. They do not perform result extraction.
 
 
 Independence
@@ -263,8 +275,8 @@ Troubleshooting
 1. No values appear for one variable
 
    Confirm that variable was requested as field output in the analysis and is
-   available for the selected element type. The console and report state which
-   exact or parent field names were found.
+   available for the selected element type. The text report states which exact
+   or parent field names were found.
 
 2. An exact element label has the wrong element type
 

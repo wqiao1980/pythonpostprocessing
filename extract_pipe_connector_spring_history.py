@@ -19,7 +19,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r1"
+SCRIPT_VERSION = "2026-09-06-r2"
 DEFAULT_INSTANCE = "PART-1-1"
 VARIABLES = ("ESF1", "CTF1", "S11", "E11")
 PARENT_FIELDS = {
@@ -129,6 +129,14 @@ def parse_arguments():
         help=(
             "List element sets containing pipe, connector, or spring "
             "elements in --instance, then exit."
+        ),
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Print extraction progress and warnings. Extraction is quiet "
+            "by default; results are written to the text report and Excel."
         ),
     )
     step_selection = parser.add_mutually_exclusive_group()
@@ -1171,10 +1179,12 @@ def process_odb(
     requested_steps,
     step_range,
     group_options,
+    verbose=False,
 ):
     odb = None
     try:
-        print("Opening: {0}".format(odb_path))
+        if verbose:
+            print("Opening: {0}".format(odb_path))
         odb = openOdb(path=odb_path, readOnly=True)
         instance_key, instance = resolve_instance(odb, instance_name)
         element_by_label = dict(
@@ -1246,35 +1256,43 @@ def process_odb(
         )
         odb_stem = os.path.splitext(os.path.basename(odb_path))[0]
         write_excel(excel_path, odb_stem, records, groups)
-        print(
-            "Selected: {0} pipe, {1} connector, {2} spring element(s)".format(
-                len(selections["pipe"]),
-                len(selections["connector"]),
-                len(selections["spring"]),
+        if verbose:
+            print(
+                "Selected: {0} pipe, {1} connector, {2} spring "
+                "element(s)".format(
+                    len(selections["pipe"]),
+                    len(selections["connector"]),
+                    len(selections["spring"]),
+                )
             )
-        )
-        print(
-            "History: {0} frame(s), {1} shared-node sum pair(s)".format(
-                len(records), len(pairs)
+            print(
+                "History: {0} frame(s), {1} shared-node sum pair(s)".format(
+                    len(records), len(pairs)
+                )
             )
-        )
         for variable in VARIABLES:
             if (
                 (variable == "ESF1" and selections["pipe"])
                 or (variable == "CTF1" and selections["connector"])
                 or (variable in ("S11", "E11") and selections["spring"])
-            ) and not available_counts[variable]:
+            ) and not available_counts[variable] and verbose:
                 print(
                     "Warning: no {0} values were found in the selected "
                     "steps/elements.".format(variable)
                 )
-        if selections["connector"] and selections["spring"] and not pairs:
+        if (
+            selections["connector"]
+            and selections["spring"]
+            and not pairs
+            and verbose
+        ):
             print(
                 "Warning: no selected connector/spring pair shares exactly "
                 "one node; the sum chart is empty."
             )
-        print("Wrote: {0}".format(report_path))
-        print("Excel: {0}".format(excel_path))
+        if verbose:
+            print("Wrote: {0}".format(report_path))
+            print("Excel: {0}".format(excel_path))
     finally:
         if odb is not None:
             odb.close()
@@ -1365,12 +1383,13 @@ def write_execution_log(log_path, input_dir, output_dir, jobs, failures):
 
 
 def main():
-    print(
-        "extract_pipe_connector_spring_history.py version {0}".format(
-            SCRIPT_VERSION
-        )
-    )
     args = parse_arguments()
+    if args.verbose:
+        print(
+            "extract_pipe_connector_spring_history.py version {0}".format(
+                SCRIPT_VERSION
+            )
+        )
     input_dir = os.path.abspath(args.input_dir)
     odb_paths = find_odb_files(input_dir, args.odb)
     if args.list_steps or args.list_element_sets:
@@ -1412,24 +1431,28 @@ def main():
                 args.steps,
                 args.step_range,
                 group_options,
+                args.verbose,
             )
         except Exception as exc:
             traceback_text = traceback.format_exc()
             failures.append((odb_path, str(exc), traceback_text))
-            print("FAILED: {0}".format(odb_path))
-            print("        {0}".format(exc))
-            print(traceback_text)
+            if args.verbose:
+                print("FAILED: {0}".format(odb_path))
+                print("        {0}".format(exc))
+                print(traceback_text)
     log_path = os.path.join(
         output_dir, "extract_pipe_connector_spring_history.log"
     )
     write_execution_log(log_path, input_dir, output_dir, jobs, failures)
-    print(
-        "Completed: {0} succeeded, {1} failed.".format(
-            len(jobs) - len(failures), len(failures)
+    if args.verbose:
+        print(
+            "Completed: {0} succeeded, {1} failed.".format(
+                len(jobs) - len(failures), len(failures)
+            )
         )
-    )
     if failures:
-        print("Diagnostic log: {0}".format(log_path))
+        if args.verbose:
+            print("Diagnostic log: {0}".format(log_path))
         return 1
     return 0
 
