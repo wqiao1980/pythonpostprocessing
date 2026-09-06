@@ -267,6 +267,29 @@ The explicit --list-steps and --list-element-sets commands still print their
 requested lists to the screen. They do not perform result extraction.
 
 
+Terminate a running extraction
+------------------------------
+
+To stop a run from the Abaqus Command Prompt:
+
+1. Click the command window so it has keyboard focus.
+2. Press Ctrl+C.
+3. If Windows asks "Terminate batch job (Y/N)?", type Y and press Enter.
+4. If Ctrl+C does not respond, try Ctrl+Break and wait briefly.
+
+Some ODB field-reading operations run inside Abaqus code and may not react to
+Ctrl+C immediately. As a last resort, open Windows Task Manager, identify the
+Abaqus/Python process started by this command, and select End task. Take care
+not to terminate another Abaqus analysis or an unrelated Python process.
+
+The script opens every ODB read-only, so terminating postprocessing does not
+modify or damage the ODB. However, the current .rpt, .xlsx, or .log file may be
+missing, incomplete, or unreadable if the run stops while that file is being
+written. Rerun the script to overwrite those partial outputs. The Abaqus
+license should be released after the stopped process exits, although the
+license server may take a short time to show it as available.
+
+
 Independence
 ------------
 
