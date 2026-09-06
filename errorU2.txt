@@ -23,3 +23,9 @@ Traceback (most recent call last):
   File "SMAPython\SMAPytLibPy.m\src\site.py", line 120, in _numpyHook
     d = set()
 ImportError: No module named extract_le11_the11_selected_steps_pipe_only
+KP	KP	WD	ESF1	Axial Strain	THE	SK2	SK1	BMY	BM-Z
+(m)	(m)	(m)	(N)	1		1/m	1/m	N-m	N-m
+0.00	0.00E+00	-1.21E+03	-6.55E+05	1.83E-03	1.80E-03	8.08E-03	-6.28E-06	2.22E+05	-172.251
+1.00	1.00E+00	-1.21E+03	-6.55E+05	1.83E-03	1.80E-03	7.83E-03	-5.86E-06	2.15E+05	-160.597
+2.01	2.01E+00	-1.21E+03	-6.55E+05	1.83E-03	1.80E-03	7.27E-03	-4.95E-06	1.99E+05	-135.681
+3.01	3.01E+00	-1.21E+03	-6.54E+05	1.83E-03	1.80E-03	6.59E-03	-3.94E-06	1.81E+05	-107.9
