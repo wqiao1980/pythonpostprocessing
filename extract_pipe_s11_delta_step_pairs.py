@@ -26,7 +26,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r10"
+SCRIPT_VERSION = "2026-09-06-r11"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -1563,6 +1563,27 @@ def section_radius_from_label(label):
         match = re.search(pattern, text_without_sp, flags=re.IGNORECASE)
         if match:
             return float(match.group(1).replace("D", "E").replace("d", "e"))
+    first_fraction_match = re.search(
+        r"\b1\s*-\s*FRACTION\s*(?:=|:)?\s*(%s)" % FLOAT_PATTERN,
+        text_without_sp,
+        flags=re.IGNORECASE,
+    )
+    second_fraction_match = re.search(
+        r"\b2\s*-\s*FRACTION\s*(?:=|:)?\s*(%s)" % FLOAT_PATTERN,
+        text_without_sp,
+        flags=re.IGNORECASE,
+    )
+    if first_fraction_match and second_fraction_match:
+        first_fraction = float(
+            first_fraction_match.group(1).replace("D", "E").replace("d", "e")
+        )
+        second_fraction = float(
+            second_fraction_match.group(1).replace("D", "E").replace("d", "e")
+        )
+        return math.sqrt(
+            first_fraction * first_fraction
+            + second_fraction * second_fraction
+        )
     number_tokens = re.findall(FLOAT_PATTERN, text_without_sp)
     if len(number_tokens) == 1:
         return float(number_tokens[0].replace("D", "E").replace("d", "e"))

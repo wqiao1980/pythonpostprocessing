@@ -276,10 +276,10 @@ Every remaining column contains S11 for one section point. Each heading gives
 the output thick-pipe angle, signed radius, and Abaqus section-point number. For
 example:
 
-S11 ANGLE -90 DEG RADIUS -0.6 [SP 9]
-S11 ANGLE -90 DEG RADIUS -0.8 [SP 5]
-S11 ANGLE -90 DEG RADIUS -1 [SP 1]
-S11 ANGLE 0 DEG RADIUS +0.6 [SP 10]
+S11 ANGLE -90 DEG RADIUS +0.67771 [SP 1]
+S11 ANGLE -90 DEG RADIUS +0.838855 [SP 2]
+S11 ANGLE -90 DEG RADIUS +1 [SP 3]
+S11 ANGLE 0 DEG RADIUS +0.67771 [SP 13]
 
 Columns are ordered first by angle, then from the smallest absolute radius to
 the largest absolute radius. Positive and negative radius values remain
@@ -361,6 +361,23 @@ Inner, middle, and outer fiber identification
 The final report always contains twelve radius/angle columns per step pair. The
 script reads both the output thick-pipe section radius and output thick-pipe
 section angle from each Abaqus section-point description.
+
+Some Abaqus ODBs write an explicit radius, for example:
+
+Angle = -67.5000, Radius = 0.6777
+
+At the principal angles -90, 0, 90, and 180 degrees, Abaqus can instead write
+two section-coordinate fractions, for example:
+
+Angle = -90.0000, (1-fraction = 0.000000, 2-fraction = -0.677710)
+
+When Radius is absent, the script calculates its nonnegative magnitude as:
+
+radius = sqrt((1-fraction)^2 + (2-fraction)^2)
+
+Thus the example above maps to radius 0.677710. The angle retains the
+circumferential direction. Explicit signed Radius values remain signed and are
+not combined with a different signed-radius section point at the same angle.
 
 The required mapping is:
 
