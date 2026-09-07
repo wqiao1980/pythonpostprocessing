@@ -455,9 +455,24 @@ The log records selected paths, step pairs, frame counts, matching statistics,
 S11 source fields, both MAX and MIN calculation definitions, the final .rpt
 path, all three Excel paths, warnings, errors, and tracebacks.
 
-To print short progress and output paths, add:
+To print live frame-by-frame progress and output paths, add:
 
 --verbose
+
+Example:
+
+abaqus python extract_pipe_s11_delta_step_pairs.py --odb "model.odb" --step-pair 22 23 --verbose
+
+The script prints a completion line after every processed frame, for example:
+
+Pair 1/1, first step 'Step-22': frame 15/86 complete (17.4%); finite samples=24576, cumulative=368640
+Pair 1/1, second step 'Step-23': frame 21/103 complete (20.4%); finite samples=24576, cumulative=516096
+
+Each progress line identifies the step pair, first or second step, completed
+frame count, percentage, finite samples in that frame, and cumulative samples
+for that step. Output is flushed immediately, so the lines also appear promptly
+when the command output is redirected to a console text file. A single large
+frame can still take time before its completion line appears.
 
 Even in verbose mode, detailed errors and complete lists of available element
 sets are written to the log instead of being printed. Explicit listing commands

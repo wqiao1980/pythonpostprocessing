@@ -27,7 +27,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-07-r12"
+SCRIPT_VERSION = "2026-09-07-r13"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -35,6 +35,12 @@ try:
     TEXT_TYPE = unicode
 except NameError:
     TEXT_TYPE = str
+
+
+def emit_progress(message):
+    """Print a progress line immediately, including under redirected output."""
+    print(message)
+    sys.stdout.flush()
 
 
 def parse_arguments():
@@ -182,7 +188,10 @@ def parse_arguments():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print short progress messages. Extraction is quiet by default.",
+        help=(
+            "Print and flush live progress after every processed frame. "
+            "Extraction is quiet by default."
+        ),
     )
     args = parser.parse_args()
     for first_label, last_label in args.pipe_element_range:
@@ -1445,6 +1454,8 @@ def scan_step_s11_envelope(
     intermediate_spool,
     intermediate_catalog,
     precision,
+    progress_callback=None,
+    progress_prefix=None,
 ):
     maximum_by_location = {}
     minimum_by_location = {}
@@ -1453,7 +1464,9 @@ def scan_step_s11_envelope(
     section_labels = {}
     source_names = set()
     sample_count = 0
+    frame_count = len(frames)
     for frame_index, frame in enumerate(frames):
+        frame_sample_start = sample_count
         values, frame_sections, source = extract_s11_locations(
             frame,
             instance,
@@ -1525,6 +1538,18 @@ def scan_step_s11_envelope(
                         )
                     )
                 intermediate_spool.write("\t".join(row) + "\n")
+        if progress_callback is not None:
+            progress_callback(
+                "{0}: frame {1}/{2} complete ({3:.1f}%); "
+                "finite samples={4}, cumulative={5}".format(
+                    progress_prefix or "S11 scan",
+                    frame_index + 1,
+                    frame_count,
+                    100.0 * float(frame_index + 1) / float(frame_count),
+                    sample_count - frame_sample_start,
+                    sample_count,
+                )
+            )
     return {
         "maximum": maximum_by_location,
         "minimum": minimum_by_location,
@@ -1551,6 +1576,8 @@ def calculate_pair_profile(
     element_path_nodes,
     write_intermediate,
     precision,
+    pair_count=1,
+    progress_callback=None,
 ):
     first_frames = odb.steps[first_name].frames
     second_frames = odb.steps[second_name].frames
@@ -1578,6 +1605,12 @@ def calculate_pair_profile(
         "labels": {},
     }
     try:
+        if progress_callback is not None:
+            progress_callback(
+                "Pair {0}/{1} started: '{2}' - '{3}'".format(
+                    pair_index, pair_count, first_name, second_name
+                )
+            )
         if write_intermediate:
             intermediate_output = intermediate_path(
                 output_dir,
@@ -1604,6 +1637,10 @@ def calculate_pair_profile(
             intermediate_spool,
             intermediate_catalog,
             precision,
+            progress_callback,
+            "Pair {0}/{1}, first step '{2}'".format(
+                pair_index, pair_count, first_name
+            ),
         )
         second_envelope = scan_step_s11_envelope(
             second_step_number,
@@ -1617,6 +1654,10 @@ def calculate_pair_profile(
             intermediate_spool,
             intermediate_catalog,
             precision,
+            progress_callback,
+            "Pair {0}/{1}, second step '{2}'".format(
+                pair_index, pair_count, second_name
+            ),
         )
         first_values = first_envelope["maximum"]
         second_values = second_envelope["maximum"]
@@ -1683,6 +1724,13 @@ def calculate_pair_profile(
                     "second": second_minimum_value,
                     "delta": minimum_delta,
                 }
+        if progress_callback is not None:
+            progress_callback(
+                "Pair {0}/{1}: envelope comparison complete; matched "
+                "locations={2}".format(
+                    pair_index, pair_count, len(common_locations)
+                )
+            )
         if intermediate_spool is not None:
             intermediate_spool.close()
             intermediate_spool = None
@@ -2275,12 +2323,12 @@ def write_final_report(
     return group_display, mapping_method, excel_paths
 
 
-def process_odb(odb_path, output_dir, args):
+def process_odb(odb_path, output_dir, args, progress_callback=None):
     odb = None
     messages = []
     try:
-        if args.verbose:
-            print("Opening: {0}".format(odb_path))
+        if progress_callback is not None:
+            progress_callback("Opening ODB: {0}".format(odb_path))
         odb = openOdb(path=odb_path, readOnly=True)
         instance_key, instance = resolve_instance(odb, args.instance)
         coordinates = node_coordinates(instance)
@@ -2364,6 +2412,15 @@ def process_odb(odb_path, output_dir, args):
             )
         available_steps = list(odb.steps.keys())
         step_pairs = resolve_step_pairs(available_steps, args.step_pair)
+        if progress_callback is not None:
+            progress_callback(
+                "Path ready: {0} pipe element(s), {1} node(s), "
+                "{2} step pair(s)".format(
+                    len(output_element_labels),
+                    len(output_nodes),
+                    len(step_pairs),
+                )
+            )
         profiles = []
         for pair_index, pair in enumerate(step_pairs, 1):
             profile = calculate_pair_profile(
@@ -2381,10 +2438,14 @@ def process_odb(odb_path, output_dir, args):
                 element_path_nodes,
                 args.write_intermediate,
                 args.precision,
+                len(step_pairs),
+                progress_callback,
             )
             profiles.append(profile)
-            if args.verbose and profile["intermediate"]:
-                print("Intermediate: {0}".format(profile["intermediate"]))
+            if progress_callback is not None and profile["intermediate"]:
+                progress_callback(
+                    "Intermediate: {0}".format(profile["intermediate"])
+                )
         report_path = final_report_path(output_dir, odb_path)
         group_display, mapping_method, excel_paths = write_final_report(
             report_path,
@@ -2467,10 +2528,10 @@ def process_odb(odb_path, output_dir, args):
                     fiber_name.title(), excel_paths[fiber_name]
                 )
             )
-        if args.verbose:
-            print("Final report: {0}".format(report_path))
+        if progress_callback is not None:
+            progress_callback("Final report: {0}".format(report_path))
             for fiber_name in FIBER_NAMES:
-                print(
+                progress_callback(
                     "{0} fiber Excel: {1}".format(
                         fiber_name.title(), excel_paths[fiber_name]
                     )
@@ -2603,8 +2664,9 @@ def write_log(log_path, input_dir, output_dir, successes, failures):
 
 def main():
     args = parse_arguments()
+    progress_callback = emit_progress if args.verbose else None
     if args.verbose:
-        print(
+        progress_callback(
             "extract_pipe_s11_delta_step_pairs.py version {0}".format(
                 SCRIPT_VERSION
             )
@@ -2632,24 +2694,24 @@ def main():
     for odb_path in odb_paths:
         try:
             report_path, unused_profiles, messages = process_odb(
-                odb_path, output_dir, args
+                odb_path, output_dir, args, progress_callback
             )
             successes.append((odb_path, report_path, messages))
         except Exception as exc:
             failures.append((odb_path, str(exc), traceback.format_exc()))
-            if args.verbose:
-                print("FAILED: {0}".format(odb_path))
+            if progress_callback is not None:
+                progress_callback("FAILED: {0}".format(odb_path))
     log_path = os.path.join(
         output_dir, "extract_pipe_s11_delta_step_pairs.log"
     )
     write_log(log_path, input_dir, output_dir, successes, failures)
-    if args.verbose:
-        print(
+    if progress_callback is not None:
+        progress_callback(
             "Completed: {0} ODB(s) succeeded, {1} failed.".format(
                 len(successes), len(failures)
             )
         )
-        print("Log: {0}".format(log_path))
+        progress_callback("Log: {0}".format(log_path))
     return 1 if failures else 0
 
 
