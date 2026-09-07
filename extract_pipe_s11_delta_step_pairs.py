@@ -26,7 +26,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r9"
+SCRIPT_VERSION = "2026-09-06-r10"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -1231,16 +1231,18 @@ def write_intermediate_report(
         report.write("Step Number is the 1-based ODB step position.\n")
         report.write("Frame Number is the zero-based Abaqus frame index.\n")
         report.write(
-            "Each row is one start-to-end path node for one step/frame. "
-            "Element Number(s) lists the contributing adjacent path "
-            "elements. At a shared node, each section-point S11 is the "
-            "arithmetic average across those elements. Blank cells mean "
-            "that section-point result was not available in that frame.\n\n"
+            "Each row is one start-to-end path element for one step/frame. "
+            "Pipe Distance is the midpoint station of that element, and "
+            "Node Number(s) lists its path nodes. Each section-point S11 "
+            "is averaged only across element-nodal values belonging to "
+            "that same element; adjacent elements are never averaged "
+            "together. Blank cells mean that section-point result was not "
+            "available in that frame.\n\n"
         )
         headers = [
             "Pipe Distance",
-            "Node Number",
-            "Element Number(s)",
+            "Node Number(s)",
+            "Element Number",
             "Step Number",
             "Frame Number",
         ]
@@ -1283,6 +1285,8 @@ def scan_step_s11_envelope(
     output_nodes,
     output_element_labels,
     route_distances,
+    element_path_distances,
+    element_path_nodes,
     intermediate_spool,
     intermediate_catalog,
     precision,
@@ -1320,34 +1324,33 @@ def scan_step_s11_envelope(
                 section_id = add_intermediate_section(
                     intermediate_catalog, location[2], section_label
                 )
-                node_row = frame_rows.setdefault(
-                    location[0], {"elements": set(), "values": {}}
+                element_row = frame_rows.setdefault(
+                    location[1], {"values": {}}
                 )
-                node_row["elements"].add(location[1])
-                node_row["values"].setdefault(section_id, []).append(value)
+                element_row["values"].setdefault(section_id, []).append(value)
         if intermediate_spool is not None:
-            for node_label in sorted(
+            for element_label in sorted(
                 frame_rows.keys(),
                 key=lambda item: (
-                    route_distances.get(item, float("inf")),
+                    element_path_distances.get(item, float("inf")),
                     item,
                 ),
             ):
-                node_row = frame_rows[node_label]
+                element_row = frame_rows[element_label]
                 row = [
                     scientific_text(
-                        route_distances.get(node_label), precision
+                        element_path_distances.get(element_label), precision
                     ),
-                    str(node_label),
                     ",".join(
                         str(label)
-                        for label in sorted(node_row["elements"])
+                        for label in element_path_nodes[element_label]
                     ),
+                    str(element_label),
                     str(step_number),
                     str(frame_index),
                 ]
-                for section_id in sorted(node_row["values"].keys()):
-                    section_values = node_row["values"][section_id]
+                for section_id in sorted(element_row["values"].keys()):
+                    section_values = element_row["values"][section_id]
                     row.append(str(section_id))
                     row.append(
                         scientific_text(
@@ -1376,6 +1379,8 @@ def calculate_pair_profile(
     output_nodes,
     output_element_labels,
     route_distances,
+    element_path_distances,
+    element_path_nodes,
     write_intermediate,
     precision,
 ):
@@ -1423,6 +1428,8 @@ def calculate_pair_profile(
             output_nodes,
             output_element_labels,
             route_distances,
+            element_path_distances,
+            element_path_nodes,
             intermediate_spool,
             intermediate_catalog,
             precision,
@@ -1434,6 +1441,8 @@ def calculate_pair_profile(
             output_nodes,
             output_element_labels,
             route_distances,
+            element_path_distances,
+            element_path_nodes,
             intermediate_spool,
             intermediate_catalog,
             precision,
@@ -2025,6 +2034,27 @@ def process_odb(odb_path, output_dir, args):
         output_nodes = [
             node_label for node_label in route if node_label in output_node_set
         ]
+        element_path_distances = {}
+        element_path_nodes = {}
+        for element_label in output_element_labels:
+            path_nodes = sorted(
+                set(
+                    int(label)
+                    for label in pipe_elements[element_label].connectivity
+                    if int(label) in route_distances
+                ),
+                key=lambda label: (route_distances[label], label),
+            )
+            if len(path_nodes) < 2:
+                raise ValueError(
+                    "Pipe element {0} does not have at least two nodes on "
+                    "the resolved START-to-END route.".format(element_label)
+                )
+            element_path_nodes[element_label] = path_nodes
+            element_path_distances[element_label] = 0.5 * (
+                route_distances[path_nodes[0]]
+                + route_distances[path_nodes[-1]]
+            )
         available_steps = list(odb.steps.keys())
         step_pairs = resolve_step_pairs(available_steps, args.step_pair)
         profiles = []
@@ -2040,6 +2070,8 @@ def process_odb(odb_path, output_dir, args):
                 output_nodes,
                 output_element_labels,
                 route_distances,
+                element_path_distances,
+                element_path_nodes,
                 args.write_intermediate,
                 args.precision,
             )

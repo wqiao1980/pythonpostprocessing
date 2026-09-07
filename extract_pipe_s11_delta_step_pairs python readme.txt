@@ -267,8 +267,8 @@ The intermediate report contains one wide tab-delimited table. Its first five
 columns are always:
 
 Pipe Distance
-Node Number
-Element Number(s)
+Node Number(s)
+Element Number
 Step Number
 Frame Number
 
@@ -290,26 +290,31 @@ Step Number is the 1-based position of the step in the ODB. The report header
 maps each number to its complete step name. Frame Number is the zero-based
 Abaqus frame index. Thus frame 0 is the first frame of that step.
 
-Each data row represents one start-to-end path node for one step and frame.
-Pipe distance is therefore written only once at each path node. Element
-Number(s) lists the adjacent path elements that contributed at the node; for
-example, 101,102 means that elements 101 and 102 share that node. For every
-section point, the reported intermediate S11 is the arithmetic average of the
-available values from those contributing elements. A blank S11 cell means that
-section-point value was not available in that frame.
+Each data row represents one start-to-end path element for one step and frame.
+Pipe Distance is the midpoint station of that element, calculated as one half
+of the sum of the route distances at its first and last path nodes. Node
+Number(s) lists the nodes belonging to that element; for example, 101,102 means
+that the element connects nodes 101 and 102. Element Number contains exactly
+one pipe element label.
+
+For every section point, the intermediate S11 is the arithmetic average of the
+available element-nodal S11 values belonging to that same element. S11 is never
+averaged with an adjacent pipe element. A blank S11 cell means that the section-
+point value was not available for that element and frame.
 
 Rows are ordered as follows:
 
-1. first selected step, frame 0, pipe distance from START to END;
-2. first selected step, frame 1, pipe distance from START to END;
+1. first selected step, frame 0, element midpoint distance from START to END;
+2. first selected step, frame 1, element midpoint distance from START to END;
 3. remaining first-step frames in increasing frame order;
 4. second selected step, frame 0, pipe distance from START to END; and
 5. remaining second-step frames in increasing frame order.
 
-Thus the pipe distance restarts at zero for each new frame when the complete
-path is selected. When pipe element selectors are used, only selected elements
-on the START-to-END route contribute, so the listed distance range can be a
-subset of the complete route.
+Thus the ordered element-distance sequence restarts for each new frame. Because
+distances are located at element midpoints, the first value is normally half
+the first element length rather than zero, and the last value is normally half
+the last element length before the total route length. When pipe element
+selectors are used, only selected elements on the START-to-END route appear.
 
 The intermediate report does not pair frames and does not contain a per-frame
 Delta S11. The final Delta S11 calculation still independently envelopes all
@@ -341,12 +346,13 @@ equal the controlling frame in the second step. Duplicate finite values at an
 identical location within one frame are averaged. NaN and infinite values are
 ignored.
 
-For the optional intermediate wide table only, element-nodal S11 values from
-adjacent selected path elements are also averaged at their shared node. This
-prevents the same pipeline distance from appearing more than once in a step and
-frame. The final Delta S11 calculation remains element-specific before its
-documented final node envelope, so this intermediate presentation change does
-not alter the final .rpt or Excel results.
+For the optional intermediate wide table only, the element-nodal S11 values at
+the nodes of one element are averaged to give that element's section-point S11.
+Adjacent elements remain separate rows at separate element-midpoint distances
+and are never averaged together. The final Delta S11 calculation remains
+element/node/section-point specific before its documented final node envelope,
+so this intermediate presentation change does not alter the final .rpt or Excel
+results.
 
 
 Inner, middle, and outer fiber identification
