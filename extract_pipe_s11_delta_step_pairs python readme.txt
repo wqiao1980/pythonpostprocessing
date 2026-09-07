@@ -9,17 +9,20 @@ For every user-defined pair of steps, it:
 
 - reads S11 for pipe elements along the pipeline path;
 - reads every frame and every available section point;
-- finds the maximum S11 over all frames independently in each step at every
-  element/node/section-point location;
-- calculates Delta S11 = maximum S11 in the first step minus maximum S11 in
-  the second step at each matching location;
-- finds the maximum signed Delta S11 separately at -90, 0, 90, and 180 degrees
-  for the inner, middle, and outer radii at each path node; and
+- finds both the maximum and minimum S11 over all frames independently in each
+  step at every element/node/section-point location;
+- calculates MAX Delta S11 = maximum S11 in the first step minus maximum S11
+  in the second step, and MIN Delta S11 = minimum S11 in the first step minus
+  minimum S11 in the second step, at each matching location;
+- retains the greatest signed MAX Delta S11 and the smallest signed MIN Delta
+  S11 separately at -90, 0, 90, and 180 degrees for the inner, middle, and
+  outer radii at each path node;
 - writes a wide tab-delimited .rpt report containing one pipeline-distance
-  column followed by twelve radius/angle columns for every requested step pair;
-  and
+  column followed by twenty-four MAX/MIN radius/angle columns for every
+  requested step pair; and
 - writes the same final data into three editable Excel .xlsx workbooks, one
-  each for the inner, middle, and outer fiber.
+  each for the inner, middle, and outer fiber, with one native editable chart
+  for every requested step pair.
 
 Raw frame-by-frame S11 values are not written unless --write-intermediate is
 entered. The per-location step envelopes used for Delta S11 are always handled
@@ -36,8 +39,11 @@ Important calculation definitions
 
 Step-pair order matters. At each matching element/node/section-point location:
 
-Delta S11 = maximum S11 over all first-step frames
-             - maximum S11 over all second-step frames
+MAX Delta S11 = maximum S11 over all first-step frames
+                  - maximum S11 over all second-step frames
+
+MIN Delta S11 = minimum S11 over all first-step frames
+                  - minimum S11 over all second-step frames
 
 For example:
 
@@ -45,20 +51,23 @@ For example:
 
 means:
 
-Delta S11 = max-frame S11(AsLaid) - max-frame S11(Operational)
+MAX Delta S11 = max-frame S11(AsLaid) - max-frame S11(Operational)
+MIN Delta S11 = min-frame S11(AsLaid) - min-frame S11(Operational)
 
 Frames are not paired. Each step is scanned and enveloped independently. The
 two steps may have different frame counts, frame times, and time increments.
 
 For example, at one matching section point:
 
-- first-step S11 across its frames: 10, 25, 20; maximum = 25;
-- second-step S11 across its frames: 5, 30; maximum = 30; and
-- Delta S11 = 25 - 30 = -5.
+- first-step S11 across its frames: 10, 25, 20; maximum = 25 and minimum = 10;
+- second-step S11 across its frames: 5, 30; maximum = 30 and minimum = 5;
+- MAX Delta S11 = 25 - 30 = -5; and
+- MIN Delta S11 = 10 - 5 = 5.
 
-At one path node, the script reports twelve values for each step pair. Each is
-the greatest signed Delta S11 among all selected pipe elements contributing at
-that node for one specific radius/angle section point:
+At one path node, the script reports twenty-four values for each step pair.
+For every radius/angle section point, it reports the greatest signed MAX Delta
+S11 and the smallest signed MIN Delta S11 among all selected pipe elements
+contributing at that node:
 
 - inner radius at -90, 0, 90, and 180 degrees;
 - middle radius at -90, 0, 90, and 180 degrees; and
@@ -66,8 +75,8 @@ that node for one specific radius/angle section point:
 
 Positive and negative radius section points are not combined.
 
-This is a numerical signed maximum, not the maximum absolute magnitude. For
-example, the maximum of -20, -5, and 3 is 3.
+These are numerical signed envelopes, not absolute magnitudes. For example,
+the reported MAX of -20, -5, and 3 is 3, while the reported MIN is -20.
 
 
 Quick examples
@@ -193,27 +202,40 @@ For one step pair, the column pattern is:
 
 Pipeline Distance
 DELTA_S11 MAX INNER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN INNER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX INNER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN INNER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX INNER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN INNER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX INNER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN INNER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX MIDDLE FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN MIDDLE FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX MIDDLE FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN MIDDLE FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX MIDDLE FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN MIDDLE FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX MIDDLE FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN MIDDLE FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX OUTER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN OUTER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX OUTER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN OUTER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX OUTER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN OUTER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
 DELTA_S11 MAX OUTER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
+DELTA_S11 MIN OUTER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
 
 These headings appear on one tab-delimited header row. They are shown one per
 line above only for readability.
 
 There is only one location column: Pipeline Distance. A node-label column is
-not written. Each --step-pair adds exactly twelve adjacent result columns. The
-order is INNER at all four angles, MIDDLE at all four angles, then OUTER at all
-four angles. Additional pairs repeat this twelve-column group to the right in
-command-line order. Blank cells mean no matching finite S11 value was available
-for that radius, angle, path location, and pair.
+not written. Each --step-pair adds exactly twenty-four adjacent result columns.
+MAX and MIN are adjacent for each angle. The order is INNER at all four angles,
+MIDDLE at all four angles, then OUTER at all four angles. Additional pairs
+repeat this twenty-four-column group to the right in command-line order. Blank
+cells mean no matching finite S11 value was available for that radius, angle,
+path location, and pair.
 
 The .rpt output is tab-delimited even though the example above uses spaces for
 readability. It can be opened in a text editor or imported into Excel manually.
@@ -229,9 +251,16 @@ model_MAX_DELTA_S11_MIDDLE_FIBER.xlsx
 model_MAX_DELTA_S11_OUTER_FIBER.xlsx
 
 Each workbook contains only one fiber. Its first data column is Pipeline
-Distance. For every requested step pair, the next four columns contain maximum
-Delta S11 at -90, 0, 90, and 180 degrees. Additional step pairs repeat this
-four-column group to the right in the same order as the command line.
+Distance. For every requested step pair, the next eight columns contain MAX
+then MIN Delta S11 at -90, 0, 90, and 180 degrees. Additional step pairs repeat
+this eight-column group to the right in the same order as the command line.
+
+Each workbook contains one native editable XY scatter/line chart for every
+requested step pair. A chart plots all eight series against the numeric
+Pipeline Distance values: four solid MAX lines and four dashed MIN lines. The
+same color identifies the same angle in both envelopes. Charts are placed below
+the data table so they do not cover results. Users can change chart type, line
+style, colors, axes, legend, title, and other formatting directly in Excel.
 
 The cells are numeric and can be reformatted, filtered, plotted, or used in
 Excel formulas. The title rows record the ODB name, calculation definition,
@@ -248,8 +277,9 @@ Optional intermediate report
 ----------------------------
 
 By default, the script does not write raw S11 to a file. It scans one step at a
-time and retains only the maximum S11 at each element/node/section-point
-location and the running maximum Delta S11 needed for the final report.
+time and retains only the maximum and minimum S11 at each element/node/section-
+point location and the signed MAX/MIN Delta S11 envelopes needed for the final
+report.
 
 To request all intermediate values, add:
 
@@ -317,9 +347,9 @@ the last element length before the total route length. When pipe element
 selectors are used, only selected elements on the START-to-END route appear.
 
 The intermediate report does not pair frames and does not contain a per-frame
-Delta S11. The final Delta S11 calculation still independently envelopes all
-frames in each step and subtracts the second-step envelope from the first-step
-envelope.
+Delta S11. The final calculation still independently creates maximum and
+minimum envelopes from all frames in each step, then subtracts each matching
+second-step envelope from its first-step envelope.
 
 The intermediate report can be very large because it includes every frame,
 section point, contributing element, and path node. It is tab-delimited and is
@@ -337,30 +367,31 @@ S11 is requested at ELEMENT_NODAL position so every result is associated with
 a pipe path node. Abaqus may extrapolate integration-point results when it
 creates this read-only subset. The ODB itself is not modified.
 
-Each step is first enveloped independently over all of its frames. Locations
-from the two step envelopes are then compared only when node label, element
-label, and section point match. Section points are matched by section-point
-number when that number is available; their descriptions are used only when no
-number is available. The controlling frame in the first step does not have to
-equal the controlling frame in the second step. Duplicate finite values at an
-identical location within one frame are averaged. NaN and infinite values are
-ignored.
+Each step is first enveloped independently over all of its frames to obtain
+both a maximum and a minimum at every location. Locations from the two step
+envelopes are then compared only when node label, element label, and section
+point match. Section points are matched by section-point number when that
+number is available; their descriptions are used only when no number is
+available. A controlling frame in the first step does not have to equal the
+corresponding controlling frame in the second step. Duplicate finite values at
+an identical location within one frame are averaged. NaN and infinite values
+are ignored.
 
 For the optional intermediate wide table only, the element-nodal S11 values at
 the nodes of one element are averaged to give that element's section-point S11.
 Adjacent elements remain separate rows at separate element-midpoint distances
-and are never averaged together. The final Delta S11 calculation remains
-element/node/section-point specific before its documented final node envelope,
-so this intermediate presentation change does not alter the final .rpt or Excel
-results.
+and are never averaged together. Both final Delta S11 calculations remain
+element/node/section-point specific before their documented final node
+envelopes, so this intermediate presentation change does not alter the final
+.rpt or Excel results.
 
 
 Inner, middle, and outer fiber identification
 ---------------------------------------------
 
-The final report always contains twelve radius/angle columns per step pair. The
-script reads both the output thick-pipe section radius and output thick-pipe
-section angle from each Abaqus section-point description.
+The final report always contains twenty-four MAX/MIN radius/angle columns per
+step pair. The script reads both the output thick-pipe section radius and
+output thick-pipe section angle from each Abaqus section-point description.
 
 Some Abaqus ODBs write an explicit radius, for example:
 
@@ -421,8 +452,8 @@ Each run writes this diagnostic log in the output directory:
 extract_pipe_s11_delta_step_pairs.log
 
 The log records selected paths, step pairs, frame counts, matching statistics,
-S11 source fields, the final .rpt path, all three Excel paths, warnings, errors,
-and tracebacks.
+S11 source fields, both MAX and MIN calculation definitions, the final .rpt
+path, all three Excel paths, warnings, errors, and tracebacks.
 
 To print short progress and output paths, add:
 
@@ -489,8 +520,8 @@ Troubleshooting
 4. The steps have different numbers of frames
 
    This is allowed. All frames in each step are used to calculate that step's
-   S11 maximum. Frames are not paired and the two frame counts do not have to
-   match. The log records both frame and sample counts.
+   S11 maximum and minimum. Frames are not paired and the two frame counts do
+   not have to match. The log records both frame and sample counts.
 
 5. The selected elements produce no output
 

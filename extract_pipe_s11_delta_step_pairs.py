@@ -1,13 +1,14 @@
 from __future__ import print_function
 
-"""Calculate maximum pipe S11 changes for user-defined ODB step pairs.
+"""Calculate pipe S11 envelope changes for user-defined ODB step pairs.
 
 The script is self-contained and runs with ``abaqus python``. S11 is read at
 every section point and every frame of each requested step. Each step is
 enveloped independently; frames are not paired. Intermediate values are
 processed in memory unless ``--write-intermediate`` is supplied. The final
-report contains maximum signed delta S11 profiles along the pipeline path,
-and the final data is split into inner-, middle-, and outer-fiber workbooks.
+report contains both maximum-envelope and minimum-envelope signed delta S11
+profiles along the pipeline path. The final data is split into inner-,
+middle-, and outer-fiber workbooks with native editable Excel charts.
 """
 
 import argparse
@@ -26,7 +27,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r11"
+SCRIPT_VERSION = "2026-09-07-r12"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -39,8 +40,8 @@ except NameError:
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description=(
-            "Calculate maximum signed delta S11 along a pipe path for "
-            "one or more user-defined ODB step pairs."
+            "Calculate maximum- and minimum-envelope signed delta S11 "
+            "along a pipe path for one or more user-defined ODB step pairs."
         )
     )
     parser.add_argument(
@@ -938,6 +939,29 @@ def write_zip_xml(archive, member_name, xml_text):
     archive.writestr(member_name, xml_text.encode("utf-8"))
 
 
+def numeric_cache(values):
+    """Build a numeric chart cache while preserving gaps for missing values."""
+    points = []
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(number) or math.isinf(number):
+            continue
+        points.append(
+            '<c:pt idx="{0}"><c:v>{1:.15g}</c:v></c:pt>'.format(
+                index, number
+            )
+        )
+    return (
+        '<c:numCache><c:formatCode>General</c:formatCode>'
+        '<c:ptCount val="{0}"/>{1}</c:numCache>'
+    ).format(len(values), "".join(points))
+
+
 def xlsx_styles_xml():
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -970,7 +994,7 @@ def xlsx_styles_xml():
 
 
 def xlsx_worksheet_xml(
-    sheet_name, title, note, section_note, headers, rows
+    sheet_name, title, note, section_note, headers, rows, charts
 ):
     column_count = len(headers)
     last_column = excel_column_name(column_count)
@@ -1016,28 +1040,133 @@ def xlsx_worksheet_xml(
                 )
             )
         row_xml.append('<row r="{0}">{1}</row>'.format(row_index, "".join(cells)))
+    drawing_xml = '<drawing r:id="rId1"/>' if charts else ""
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <dimension ref="A1:{last_column}{last_row}"/>
   <sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane xSplit="1" ySplit="5" topLeftCell="B6" activePane="bottomRight" state="frozen"/><selection pane="bottomRight" activeCell="B6" sqref="B6"/></sheetView></sheetViews>
   <sheetFormatPr defaultRowHeight="15"/>
   <cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="{column_count}" width="30" customWidth="1"/></cols>
   <sheetData>{rows_xml}</sheetData>
   <autoFilter ref="A5:{last_column}{last_row}"/>
+  {drawing_xml}
 </worksheet>""".format(
         last_column=last_column,
         last_row=last_row,
         column_count=column_count,
         rows_xml="".join(row_xml),
+        drawing_xml=drawing_xml,
     )
 
 
-def write_data_xlsx(path, sheet_name, title, note, section_note, headers, rows):
+def xlsx_worksheet_relationships_xml():
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"""
+
+
+def xlsx_drawing_xml(chart_count, first_chart_row):
+    anchors = []
+    for index in range(chart_count):
+        top_row = first_chart_row + index * 25
+        anchors.append(
+            """<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{0}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>12</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="{2}" name="Delta S11 Chart {3}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId{3}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>""".format(
+                top_row, top_row + 23, index + 2, index + 1
+            )
+        )
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{0}</xdr:wsDr>""".format(
+        "".join(anchors)
+    )
+
+
+def xlsx_drawing_relationships_xml(chart_count):
+    relationships = "".join(
+        '<Relationship Id="rId{0}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart{0}.xml"/>'.format(
+            index
+        )
+        for index in range(1, chart_count + 1)
+    )
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{0}</Relationships>""".format(
+        relationships
+    )
+
+
+def chart_text(text, font_size):
+    return """<c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="{0}"/><a:t>{1}</a:t></a:r></a:p></c:rich></c:tx>""".format(
+        font_size, xml_escape(text)
+    )
+
+
+def delta_chart_series_xml(series_index, item, chart, sheet_name, row_count):
+    column_letter = excel_column_name(item["column"])
+    start_row = 6
+    end_row = 5 + row_count
+    safe_sheet_name = TEXT_TYPE(sheet_name).replace("'", "''")
+    dash = item.get("dash", "solid")
+    return """<c:ser><c:idx val="{0}"/><c:order val="{0}"/><c:tx><c:strRef><c:f>'{1}'!${2}$5</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>{3}</c:v></c:pt></c:strCache></c:strRef></c:tx><c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="{4}"/></a:solidFill><a:prstDash val="{5}"/></a:ln></c:spPr><c:marker><c:symbol val="none"/></c:marker><c:xVal><c:numRef><c:f>'{1}'!$A${6}:$A${7}</c:f>{8}</c:numRef></c:xVal><c:yVal><c:numRef><c:f>'{1}'!${2}${6}:${2}${7}</c:f>{9}</c:numRef></c:yVal><c:smooth val="0"/></c:ser>""".format(
+        series_index,
+        xml_escape(safe_sheet_name),
+        column_letter,
+        xml_escape(item["name"]),
+        item["color"],
+        dash,
+        start_row,
+        end_row,
+        numeric_cache(chart["distances"]),
+        numeric_cache(item["values"]),
+    )
+
+
+def value_axis_xml(axis_id, cross_axis_id, position, title):
+    return """<c:valAx><c:axId val="{0}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{1}"/><c:title>{2}<c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="0.000000E+00" sourceLinked="0"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="{3}"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>""".format(
+        axis_id, position, chart_text(title, 1000), cross_axis_id
+    )
+
+
+def xlsx_delta_chart_xml(chart, sheet_name, row_count, chart_index):
+    x_axis = 88000000 + chart_index * 2
+    y_axis = x_axis + 1
+    series_xml = "".join(
+        delta_chart_series_xml(
+            index, item, chart, sheet_name, row_count
+        )
+        for index, item in enumerate(chart["series"])
+    )
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:date1904 val="0"/><c:lang val="en-US"/><c:roundedCorners val="0"/><c:style val="10"/><c:chart><c:title>{0}<c:layout/><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/><c:plotArea><c:layout/><c:scatterChart><c:scatterStyle val="line"/><c:varyColors val="0"/>{1}<c:axId val="{2}"/><c:axId val="{3}"/></c:scatterChart>{4}{5}</c:plotArea><c:legend><c:legendPos val="r"/><c:layout/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings></c:chartSpace>""".format(
+        chart_text(chart["title"], 1200),
+        series_xml,
+        x_axis,
+        y_axis,
+        value_axis_xml(x_axis, y_axis, "b", "Pipeline Distance"),
+        value_axis_xml(y_axis, x_axis, "l", "Delta S11"),
+    )
+
+
+def write_data_xlsx(
+    path, sheet_name, title, note, section_note, headers, rows, charts=None
+):
     """Write one editable, dependency-free Excel workbook."""
+    charts = charts or []
     created = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     worksheet_xml = xlsx_worksheet_xml(
-        sheet_name, title, note, section_note, headers, rows
+        sheet_name, title, note, section_note, headers, rows, charts
     )
+    drawing_override = ""
+    chart_overrides = ""
+    if charts:
+        drawing_override = (
+            '<Override PartName="/xl/drawings/drawing1.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'drawing+xml"/>'
+        )
+        chart_overrides = "".join(
+            '<Override PartName="/xl/charts/chart{0}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>'.format(
+                index
+            )
+            for index in range(1, len(charts) + 1)
+        )
     content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -1045,9 +1174,11 @@ def write_data_xlsx(path, sheet_name, title, note, section_note, headers, rows):
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  {0}
+  {1}
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>"""
+</Types>""".format(drawing_override, chart_overrides)
     root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
@@ -1083,6 +1214,30 @@ def write_data_xlsx(path, sheet_name, title, note, section_note, headers, rows):
         write_zip_xml(archive, "xl/_rels/workbook.xml.rels", workbook_rels)
         write_zip_xml(archive, "xl/styles.xml", xlsx_styles_xml())
         write_zip_xml(archive, "xl/worksheets/sheet1.xml", worksheet_xml)
+        if charts:
+            write_zip_xml(
+                archive,
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                xlsx_worksheet_relationships_xml(),
+            )
+            write_zip_xml(
+                archive,
+                "xl/drawings/drawing1.xml",
+                xlsx_drawing_xml(len(charts), 6 + len(rows)),
+            )
+            write_zip_xml(
+                archive,
+                "xl/drawings/_rels/drawing1.xml.rels",
+                xlsx_drawing_relationships_xml(len(charts)),
+            )
+            for index, chart in enumerate(charts, 1):
+                write_zip_xml(
+                    archive,
+                    "xl/charts/chart{0}.xml".format(index),
+                    xlsx_delta_chart_xml(
+                        chart, sheet_name, len(rows), index
+                    ),
+                )
     finally:
         archive.close()
 
@@ -1292,7 +1447,9 @@ def scan_step_s11_envelope(
     precision,
 ):
     maximum_by_location = {}
+    minimum_by_location = {}
     control_by_location = {}
+    minimum_control_by_location = {}
     section_labels = {}
     source_names = set()
     sample_count = 0
@@ -1315,6 +1472,15 @@ def scan_step_s11_envelope(
             if previous is None or value > previous:
                 maximum_by_location[location] = value
                 control_by_location[location] = {
+                    "frame": frame_index,
+                    "time": frame_time(frame),
+                    "value": value,
+                    "section": section_label,
+                }
+            previous_minimum = minimum_by_location.get(location)
+            if previous_minimum is None or value < previous_minimum:
+                minimum_by_location[location] = value
+                minimum_control_by_location[location] = {
                     "frame": frame_index,
                     "time": frame_time(frame),
                     "value": value,
@@ -1361,7 +1527,9 @@ def scan_step_s11_envelope(
                 intermediate_spool.write("\t".join(row) + "\n")
     return {
         "maximum": maximum_by_location,
+        "minimum": minimum_by_location,
         "control": control_by_location,
+        "minimum_control": minimum_control_by_location,
         "sections": section_labels,
         "sources": source_names,
         "samples": sample_count,
@@ -1395,8 +1563,11 @@ def calculate_pair_profile(
             "both steps contain no frames.".format(first_name, second_name)
         )
     maximum_by_node = {}
+    minimum_by_node = {}
     control_by_node = {}
+    minimum_control_by_node = {}
     delta_by_location = {}
+    minimum_delta_by_location = {}
     matched_section_labels = {}
     intermediate_output = None
     intermediate_spool = None
@@ -1449,6 +1620,8 @@ def calculate_pair_profile(
         )
         first_values = first_envelope["maximum"]
         second_values = second_envelope["maximum"]
+        first_minimum_values = first_envelope["minimum"]
+        second_minimum_values = second_envelope["minimum"]
         first_locations = set(first_values.keys())
         second_locations = set(second_values.keys())
         common_locations = first_locations.intersection(second_locations)
@@ -1457,6 +1630,10 @@ def calculate_pair_profile(
             second_value = second_values[location]
             delta = first_value - second_value
             delta_by_location[location] = delta
+            first_minimum_value = first_minimum_values[location]
+            second_minimum_value = second_minimum_values[location]
+            minimum_delta = first_minimum_value - second_minimum_value
+            minimum_delta_by_location[location] = minimum_delta
             node_label = location[0]
             matched_section_labels[location[2]] = second_envelope[
                 "sections"
@@ -1482,6 +1659,29 @@ def calculate_pair_profile(
                     "first": first_value,
                     "second": second_value,
                     "delta": delta,
+                }
+            previous_minimum = minimum_by_node.get(node_label)
+            if previous_minimum is None or minimum_delta < previous_minimum:
+                minimum_by_node[node_label] = minimum_delta
+                first_minimum_control = first_envelope["minimum_control"][
+                    location
+                ]
+                second_minimum_control = second_envelope["minimum_control"][
+                    location
+                ]
+                minimum_control_by_node[node_label] = {
+                    "first_frame": first_minimum_control["frame"],
+                    "first_time": first_minimum_control["time"],
+                    "second_frame": second_minimum_control["frame"],
+                    "second_time": second_minimum_control["time"],
+                    "element": location[1],
+                    "section": second_envelope["sections"].get(
+                        location,
+                        first_envelope["sections"].get(location, ""),
+                    ),
+                    "first": first_minimum_value,
+                    "second": second_minimum_value,
+                    "delta": minimum_delta,
                 }
         if intermediate_spool is not None:
             intermediate_spool.close()
@@ -1512,8 +1712,12 @@ def calculate_pair_profile(
         "first_frames": len(first_frames),
         "second_frames": len(second_frames),
         "maximum": maximum_by_node,
+        "minimum": minimum_by_node,
         "control": control_by_node,
+        "minimum_control": minimum_control_by_node,
         "deltas": delta_by_location,
+        "max_deltas": delta_by_location,
+        "min_deltas": minimum_delta_by_location,
         "section_labels": matched_section_labels,
         "sources": sorted(source_names),
         "first_samples": first_envelope["samples"],
@@ -1792,21 +1996,31 @@ def resolve_fiber_angle_section_groups(profiles):
     return groups, display, method
 
 
-def maximum_delta_by_node_for_section_group(profile, identities):
-    maximum = {}
-    for location, delta in profile["deltas"].items():
+def delta_by_node_for_section_group(delta_values, identities, choose_maximum):
+    selected = {}
+    for location, delta in delta_values.items():
         if location[2] not in identities:
             continue
         node_label = location[0]
-        previous = maximum.get(node_label)
-        if previous is None or delta > previous:
-            maximum[node_label] = delta
-    return maximum
+        previous = selected.get(node_label)
+        if (
+            previous is None
+            or (choose_maximum and delta > previous)
+            or (not choose_maximum and delta < previous)
+        ):
+            selected[node_label] = delta
+    return selected
 
 
-def pair_fiber_angle_column_name(profile, fiber_name, angle):
-    return "DELTA_S11 MAX {0} FIBER ANGLE {1} DEG [{2} - {3}]".format(
-        fiber_name, angle, profile["first"], profile["second"]
+def pair_fiber_angle_column_name(
+    profile, fiber_name, angle, envelope_name
+):
+    return "DELTA_S11 {0} {1} FIBER ANGLE {2} DEG [{3} - {4}]".format(
+        envelope_name,
+        fiber_name,
+        angle,
+        profile["first"],
+        profile["second"],
     )
 
 
@@ -1822,31 +2036,79 @@ def write_fiber_excel_workbooks(
     """Write one final-data workbook for each thick-pipe fiber radius."""
     paths = {}
     odb_name = os.path.basename(odb_path)
+    angle_colors = {
+        -90: "4472C4",
+        0: "ED7D31",
+        90: "70AD47",
+        180: "C00000",
+    }
     for fiber_name in FIBER_NAMES:
         headers = ["Pipeline Distance"]
-        for profile in profiles:
+        charts = []
+        for profile_index, profile in enumerate(profiles):
+            chart_series = []
             for angle in TARGET_ANGLES:
-                headers.append(
-                    pair_fiber_angle_column_name(
-                        profile, fiber_name, angle
+                for envelope_name in ("MAX", "MIN"):
+                    headers.append(
+                        pair_fiber_angle_column_name(
+                            profile,
+                            fiber_name,
+                            angle,
+                            envelope_name,
+                        )
                     )
-                )
+                    values_by_node = profile_fiber_values[profile_index][
+                        envelope_name
+                    ][(fiber_name, angle)]
+                    chart_series.append(
+                        {
+                            "name": "{0} {1} deg".format(
+                                envelope_name, angle
+                            ),
+                            "column": len(headers),
+                            "values": [
+                                values_by_node.get(node_label)
+                                for node_label in output_nodes
+                            ],
+                            "color": angle_colors[angle],
+                            "dash": (
+                                "solid"
+                                if envelope_name == "MAX"
+                                else "dash"
+                            ),
+                        }
+                    )
+            charts.append(
+                {
+                    "title": (
+                        "Delta S11 MAX and MIN [{0} - {1}]"
+                    ).format(profile["first"], profile["second"]),
+                    "distances": [
+                        route_distances[node_label]
+                        for node_label in output_nodes
+                    ],
+                    "series": chart_series,
+                }
+            )
         rows = []
         for node_label in output_nodes:
             row = [route_distances[node_label]]
             for fiber_values in profile_fiber_values:
                 for angle in TARGET_ANGLES:
-                    row.append(
-                        fiber_values[(fiber_name, angle)].get(node_label)
-                    )
+                    for envelope_name in ("MAX", "MIN"):
+                        row.append(
+                            fiber_values[envelope_name][
+                                (fiber_name, angle)
+                            ].get(node_label)
+                        )
             rows.append(row)
-        title = "{0} Fiber - Maximum Delta S11 Along Pipeline Path".format(
+        title = "{0} Fiber - Delta S11 Envelopes Along Pipeline Path".format(
             fiber_name.title()
         )
         note = (
-            "ODB: {0}. Delta S11 = maximum S11 over all first-step "
-            "frames - maximum S11 over all second-step frames; frames "
-            "are not paired."
+            "ODB: {0}. MAX = max(all first-step frames) - max(all "
+            "second-step frames); MIN = min(all first-step frames) - "
+            "min(all second-step frames). Frames are not paired."
         ).format(odb_name)
         section_note = "Section points: {0}".format(
             "; ".join(
@@ -1865,6 +2127,7 @@ def write_fiber_excel_workbooks(
             section_note,
             headers,
             rows,
+            charts,
         )
         paths[fiber_name] = path
     return paths
@@ -1888,19 +2151,35 @@ def write_final_report(
     profile_fiber_values = []
     for profile in profiles:
         profile_fiber_values.append(
-            dict(
-                (
-                    (fiber_name, angle),
-                    maximum_delta_by_node_for_section_group(
-                        profile, groups[(fiber_name, angle)]
-                    ),
+            {
+                "MAX": dict(
+                    (
+                        (fiber_name, angle),
+                        delta_by_node_for_section_group(
+                            profile["max_deltas"],
+                            groups[(fiber_name, angle)],
+                            True,
+                        ),
+                    )
+                    for fiber_name in FIBER_NAMES
+                    for angle in TARGET_ANGLES
+                ),
+                "MIN": dict(
+                    (
+                        (fiber_name, angle),
+                        delta_by_node_for_section_group(
+                            profile["min_deltas"],
+                            groups[(fiber_name, angle)],
+                            False,
+                        ),
+                    )
+                    for fiber_name in FIBER_NAMES
+                    for angle in TARGET_ANGLES
                 )
-                for fiber_name in FIBER_NAMES
-                for angle in TARGET_ANGLES
-            )
+            }
         )
     with open(path, "w") as report:
-        report.write("Pipe Maximum Delta S11 Along Pipeline Path\n")
+        report.write("Pipe Delta S11 Envelopes Along Pipeline Path\n")
         report.write("Script version: {0}\n".format(SCRIPT_VERSION))
         report.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
         report.write("Instance: {0}\n".format(instance_name))
@@ -1917,16 +2196,18 @@ def write_final_report(
             )
         )
         report.write(
-            "At each matching element/node/section-point location: Delta "
-            "S11 = maximum S11 over all first-step frames - maximum S11 "
-            "over all second-step frames.\n"
+            "At each matching element/node/section-point location: MAX "
+            "Delta S11 = max(S11 over all first-step frames) - max(S11 "
+            "over all second-step frames); MIN Delta S11 = min(S11 over "
+            "all first-step frames) - min(S11 over all second-step "
+            "frames).\n"
         )
         report.write(
             "Frames are not paired. The two steps are enveloped independently. "
-            "For each radius/angle column, the final value is the maximum "
-            "signed delta S11 across contributing pipe elements at each path "
-            "node. Positive and negative radius section points are not "
-            "combined.\n"
+            "For each radius/angle, MAX is the greatest signed MAX delta "
+            "and MIN is the smallest signed MIN delta across contributing "
+            "pipe elements at each path node. Positive and negative radius "
+            "section points are not combined.\n"
         )
         report.write("Section-point mapping method: {0}\n".format(mapping_method))
         for fiber_name in FIBER_NAMES:
@@ -1957,25 +2238,30 @@ def write_final_report(
         for profile in profiles:
             for fiber_name in FIBER_NAMES:
                 for angle in TARGET_ANGLES:
-                    headers.append(
-                        pair_fiber_angle_column_name(
-                            profile, fiber_name, angle
+                    for envelope_name in ("MAX", "MIN"):
+                        headers.append(
+                            pair_fiber_angle_column_name(
+                                profile,
+                                fiber_name,
+                                angle,
+                                envelope_name,
+                            )
                         )
-                    )
         report.write("\t".join(headers) + "\n")
         for node_label in output_nodes:
             row = [scientific_text(route_distances[node_label], precision)]
             for fiber_values in profile_fiber_values:
                 for fiber_name in FIBER_NAMES:
                     for angle in TARGET_ANGLES:
-                        row.append(
-                            scientific_text(
-                                fiber_values[(fiber_name, angle)].get(
-                                    node_label
-                                ),
-                                precision,
+                        for envelope_name in ("MAX", "MIN"):
+                            row.append(
+                                scientific_text(
+                                    fiber_values[envelope_name][
+                                        (fiber_name, angle)
+                                    ].get(node_label),
+                                    precision,
+                                )
                             )
-                        )
             report.write("\t".join(row) + "\n")
     excel_paths = write_fiber_excel_workbooks(
         os.path.dirname(path),
@@ -2291,10 +2577,17 @@ def write_log(log_path, input_dir, output_dir, successes, failures):
         log_file.write("Output directory: {0}\n".format(output_dir))
         log_file.write("Frame handling: each step enveloped independently\n")
         log_file.write(
-            "Delta at matching location: max S11 over first-step frames - "
-            "max S11 over second-step frames\n"
+            "MAX delta at matching location: max S11 over first-step "
+            "frames - max S11 over second-step frames\n"
         )
-        log_file.write("Final envelope: maximum signed delta S11\n")
+        log_file.write(
+            "MIN delta at matching location: min S11 over first-step "
+            "frames - min S11 over second-step frames\n"
+        )
+        log_file.write(
+            "Final envelopes by radius/angle: greatest signed MAX delta "
+            "and smallest signed MIN delta across contributing elements\n"
+        )
         log_file.write("Successful ODBs: {0}\n".format(len(successes)))
         log_file.write("Failed ODBs: {0}\n".format(len(failures)))
         for odb_path, report_path, messages in successes:
