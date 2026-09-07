@@ -268,7 +268,7 @@ columns are always:
 
 Pipe Distance
 Node Number
-Element Number
+Element Number(s)
 Step Number
 Frame Number
 
@@ -290,10 +290,26 @@ Step Number is the 1-based position of the step in the ODB. The report header
 maps each number to its complete step name. Frame Number is the zero-based
 Abaqus frame index. Thus frame 0 is the first frame of that step.
 
-Each data row represents one combination of pipe distance, node, pipe element,
-step, and frame. All available section-point S11 values for that combination
-are written across the row. A blank S11 cell means that section-point value was
-not available in that frame.
+Each data row represents one start-to-end path node for one step and frame.
+Pipe distance is therefore written only once at each path node. Element
+Number(s) lists the adjacent path elements that contributed at the node; for
+example, 101,102 means that elements 101 and 102 share that node. For every
+section point, the reported intermediate S11 is the arithmetic average of the
+available values from those contributing elements. A blank S11 cell means that
+section-point value was not available in that frame.
+
+Rows are ordered as follows:
+
+1. first selected step, frame 0, pipe distance from START to END;
+2. first selected step, frame 1, pipe distance from START to END;
+3. remaining first-step frames in increasing frame order;
+4. second selected step, frame 0, pipe distance from START to END; and
+5. remaining second-step frames in increasing frame order.
+
+Thus the pipe distance restarts at zero for each new frame when the complete
+path is selected. When pipe element selectors are used, only selected elements
+on the START-to-END route contribute, so the listed distance range can be a
+subset of the complete route.
 
 The intermediate report does not pair frames and does not contain a per-frame
 Delta S11. The final Delta S11 calculation still independently envelopes all
@@ -324,6 +340,13 @@ number is available. The controlling frame in the first step does not have to
 equal the controlling frame in the second step. Duplicate finite values at an
 identical location within one frame are averaged. NaN and infinite values are
 ignored.
+
+For the optional intermediate wide table only, element-nodal S11 values from
+adjacent selected path elements are also averaged at their shared node. This
+prevents the same pipeline distance from appearing more than once in a step and
+frame. The final Delta S11 calculation remains element-specific before its
+documented final node envelope, so this intermediate presentation change does
+not alter the final .rpt or Excel results.
 
 
 Inner, middle, and outer fiber identification

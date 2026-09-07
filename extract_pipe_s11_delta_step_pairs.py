@@ -26,7 +26,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r8"
+SCRIPT_VERSION = "2026-09-06-r9"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -1231,15 +1231,16 @@ def write_intermediate_report(
         report.write("Step Number is the 1-based ODB step position.\n")
         report.write("Frame Number is the zero-based Abaqus frame index.\n")
         report.write(
-            "Each row is one pipe-distance/node/element/step/frame "
-            "combination. Each S11 column is one radius/angle section "
-            "point. Blank cells mean that section-point result was not "
-            "available in that frame.\n\n"
+            "Each row is one start-to-end path node for one step/frame. "
+            "Element Number(s) lists the contributing adjacent path "
+            "elements. At a shared node, each section-point S11 is the "
+            "arithmetic average across those elements. Blank cells mean "
+            "that section-point result was not available in that frame.\n\n"
         )
         headers = [
             "Pipe Distance",
             "Node Number",
-            "Element Number",
+            "Element Number(s)",
             "Step Number",
             "Frame Number",
         ]
@@ -1319,29 +1320,39 @@ def scan_step_s11_envelope(
                 section_id = add_intermediate_section(
                     intermediate_catalog, location[2], section_label
                 )
-                base = (location[0], location[1])
-                frame_rows.setdefault(base, {})[section_id] = value
+                node_row = frame_rows.setdefault(
+                    location[0], {"elements": set(), "values": {}}
+                )
+                node_row["elements"].add(location[1])
+                node_row["values"].setdefault(section_id, []).append(value)
         if intermediate_spool is not None:
-            for base in sorted(
+            for node_label in sorted(
                 frame_rows.keys(),
                 key=lambda item: (
-                    route_distances.get(item[0], float("inf")),
-                    item[0],
-                    item[1],
+                    route_distances.get(item, float("inf")),
+                    item,
                 ),
             ):
+                node_row = frame_rows[node_label]
                 row = [
-                    scientific_text(route_distances.get(base[0]), precision),
-                    str(base[0]),
-                    str(base[1]),
+                    scientific_text(
+                        route_distances.get(node_label), precision
+                    ),
+                    str(node_label),
+                    ",".join(
+                        str(label)
+                        for label in sorted(node_row["elements"])
+                    ),
                     str(step_number),
                     str(frame_index),
                 ]
-                for section_id in sorted(frame_rows[base].keys()):
+                for section_id in sorted(node_row["values"].keys()):
+                    section_values = node_row["values"][section_id]
                     row.append(str(section_id))
                     row.append(
                         scientific_text(
-                            frame_rows[base][section_id], precision
+                            sum(section_values) / float(len(section_values)),
+                            precision,
                         )
                     )
                 intermediate_spool.write("\t".join(row) + "\n")
