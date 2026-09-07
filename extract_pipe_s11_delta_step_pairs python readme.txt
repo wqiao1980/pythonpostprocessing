@@ -21,10 +21,11 @@ For every user-defined pair of steps, it:
 - writes the same final data into three editable Excel .xlsx workbooks, one
   each for the inner, middle, and outer fiber.
 
-Raw frame-by-frame S11 values and the per-location step envelopes are processed
-in memory by default. They are not written to an intermediate report unless
---write-intermediate is entered. The three final Excel workbooks are always
-created; intermediate values remain in .rpt format only when requested.
+Raw frame-by-frame S11 values are not written unless --write-intermediate is
+entered. The per-location step envelopes used for Delta S11 are always handled
+in memory and are not included in the intermediate report. The three final
+Excel workbooks are always created; intermediate values remain in .rpt format
+only when requested.
 
 Abaqus/CAE or Viewer does not need to be opened. Run the script with
 "abaqus python" from an Abaqus Command Prompt.
@@ -246,10 +247,9 @@ names are overwritten on a new run.
 Optional intermediate report
 ----------------------------
 
-By default, the script does not write raw S11 or per-location envelope results
-to a file. It scans one step at a time and retains only the maximum S11 at each
-element/node/section-point location and the running maximum Delta S11 needed for
-the final report.
+By default, the script does not write raw S11 to a file. It scans one step at a
+time and retains only the maximum S11 at each element/node/section-point
+location and the running maximum Delta S11 needed for the final report.
 
 To request all intermediate values, add:
 
@@ -263,24 +263,42 @@ For each ODB and each requested pair, this writes a file whose name looks like:
 
 model_Pair001_AsLaid_TO_Operational_S11_INTERMEDIATE.rpt
 
-The first two sections contain raw S11 rows for the first and second steps
-separately. These rows contain:
+The intermediate report contains one wide tab-delimited table. Its first five
+columns are always:
 
-- step role and step name;
-- zero-based frame index;
-- frame time;
-- pipeline path distance;
-- node label;
-- pipe element label;
-- section point;
-- S11.
+Pipe Distance
+Node Number
+Element Number
+Step Number
+Frame Number
 
-The final section contains one row per unioned location and reports:
+Every remaining column contains S11 for one section point. Each heading gives
+the output thick-pipe angle, signed radius, and Abaqus section-point number. For
+example:
 
-- maximum first-step S11 and its controlling frame index/time;
-- maximum second-step S11 and its controlling frame index/time; and
-- signed Delta S11 = first maximum - second maximum for locations present in
-  both step envelopes.
+S11 ANGLE -90 DEG RADIUS -0.6 [SP 9]
+S11 ANGLE -90 DEG RADIUS -0.8 [SP 5]
+S11 ANGLE -90 DEG RADIUS -1 [SP 1]
+S11 ANGLE 0 DEG RADIUS +0.6 [SP 10]
+
+Columns are ordered first by angle, then from the smallest absolute radius to
+the largest absolute radius. Positive and negative radius values remain
+separate. Angles outside -90, 0, 90, and 180 degrees are also retained in the
+intermediate table and follow those four standard angles.
+
+Step Number is the 1-based position of the step in the ODB. The report header
+maps each number to its complete step name. Frame Number is the zero-based
+Abaqus frame index. Thus frame 0 is the first frame of that step.
+
+Each data row represents one combination of pipe distance, node, pipe element,
+step, and frame. All available section-point S11 values for that combination
+are written across the row. A blank S11 cell means that section-point value was
+not available in that frame.
+
+The intermediate report does not pair frames and does not contain a per-frame
+Delta S11. The final Delta S11 calculation still independently envelopes all
+frames in each step and subtracts the second-step envelope from the first-step
+envelope.
 
 The intermediate report can be very large because it includes every frame,
 section point, contributing element, and path node. It is tab-delimited and is
@@ -388,7 +406,9 @@ another Abaqus analysis or unrelated Python process.
 The ODB is opened read-only, so terminating postprocessing does not modify it.
 A final .rpt, .xlsx, intermediate, or log file may be incomplete if the program
 is stopped while writing that file. Rerun the command to overwrite partial
-outputs.
+outputs. A temporary file named s11_intermediate_*.tmp can remain in the output
+directory after a forced termination; it may be deleted after confirming that
+the Abaqus postprocessing process has stopped.
 
 
 Independence

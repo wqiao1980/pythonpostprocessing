@@ -17,6 +17,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import traceback
 import zipfile
 
@@ -25,7 +26,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-06-r7"
+SCRIPT_VERSION = "2026-09-06-r8"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -143,8 +144,8 @@ def parse_arguments():
         "--write-intermediate",
         action="store_true",
         help=(
-            "Write per-frame, per-element, per-node, per-section-point S11 "
-            "and delta S11 .rpt files. Default: calculate only in memory."
+            "Write a wide per-frame S11 .rpt table with one column per "
+            "radius/angle section point. Default: calculate only in memory."
         ),
     )
     parser.add_argument(
@@ -1125,25 +1126,141 @@ def fiber_excel_path(output_dir, odb_path, fiber_name):
     )
 
 
-def open_intermediate_report(
-    path, odb_path, instance_name, first_name, second_name
+def add_intermediate_section(catalog, identity, label):
+    identity_to_id = catalog["identity_to_id"]
+    if identity not in identity_to_id:
+        section_id = len(identity_to_id) + 1
+        identity_to_id[identity] = section_id
+        catalog["id_to_identity"][section_id] = identity
+    section_id = identity_to_id[identity]
+    if label and not catalog["labels"].get(identity):
+        catalog["labels"][identity] = label
+    return section_id
+
+
+def intermediate_section_columns(catalog):
+    columns = []
+    errors = []
+    for section_id in sorted(catalog["id_to_identity"].keys()):
+        identity = catalog["id_to_identity"][section_id]
+        label = catalog["labels"].get(identity, "")
+        radius = section_radius_from_label(label)
+        angle = section_angle_from_label(label)
+        if radius is None or angle is None:
+            errors.append(label or str(identity))
+            continue
+        angle = normalize_section_angle(angle)
+        columns.append(
+            {
+                "id": section_id,
+                "identity": identity,
+                "label": label,
+                "radius": radius,
+                "angle": angle,
+            }
+        )
+    if errors:
+        raise ValueError(
+            "Cannot write the wide intermediate table because radius or "
+            "angle could not be read from these section points: {0}".format(
+                "; ".join(errors)
+            )
+        )
+    if not columns:
+        raise ValueError(
+            "Cannot write the wide intermediate table because no finite "
+            "S11 section-point values were found."
+        )
+    angle_order = dict((angle, index) for index, angle in enumerate(TARGET_ANGLES))
+    columns.sort(
+        key=lambda item: (
+            angle_order.get(item["angle"], len(TARGET_ANGLES)),
+            item["angle"],
+            abs(item["radius"]),
+            item["radius"],
+            section_identity_sort_key(item["identity"]),
+        )
+    )
+    return columns
+
+
+def section_point_short_name(identity):
+    if identity and str(identity[0]).upper() == "NUMBER":
+        return "SP {0}".format(identity[1])
+    return "SECTION {0}".format(identity[1] if len(identity) > 1 else identity)
+
+
+def intermediate_s11_column_name(column):
+    return "S11 ANGLE {0:.12g} DEG RADIUS {1:+.12g} [{2}]".format(
+        column["angle"],
+        column["radius"],
+        section_point_short_name(column["identity"]),
+    )
+
+
+def write_intermediate_report(
+    path,
+    spool_path,
+    catalog,
+    odb_path,
+    instance_name,
+    first_name,
+    first_step_number,
+    second_name,
+    second_step_number,
 ):
-    report = open(path, "w")
-    report.write("Pipe S11 Step-Pair Intermediate Results\n")
-    report.write("Script version: {0}\n".format(SCRIPT_VERSION))
-    report.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
-    report.write("Instance: {0}\n".format(instance_name))
-    report.write("First step: {0}\n".format(first_name))
-    report.write("Second step: {0}\n".format(second_name))
-    report.write(
-        "Frames are not paired. Each step is enveloped independently at "
-        "each matching element/node/section-point location.\n"
+    columns = intermediate_section_columns(catalog)
+    column_by_id = dict(
+        (column["id"], index) for index, column in enumerate(columns)
     )
-    report.write(
-        "Delta S11 = maximum S11 over all first-step frames - maximum "
-        "S11 over all second-step frames.\n\n"
-    )
-    return report
+    with open(path, "w") as report:
+        report.write("Pipe S11 Step-Pair Intermediate Results\n")
+        report.write("Script version: {0}\n".format(SCRIPT_VERSION))
+        report.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
+        report.write("Instance: {0}\n".format(instance_name))
+        report.write(
+            "First step: {0} = {1}\n".format(
+                first_step_number, first_name
+            )
+        )
+        report.write(
+            "Second step: {0} = {1}\n".format(
+                second_step_number, second_name
+            )
+        )
+        report.write("Step Number is the 1-based ODB step position.\n")
+        report.write("Frame Number is the zero-based Abaqus frame index.\n")
+        report.write(
+            "Each row is one pipe-distance/node/element/step/frame "
+            "combination. Each S11 column is one radius/angle section "
+            "point. Blank cells mean that section-point result was not "
+            "available in that frame.\n\n"
+        )
+        headers = [
+            "Pipe Distance",
+            "Node Number",
+            "Element Number",
+            "Step Number",
+            "Frame Number",
+        ]
+        headers.extend(
+            intermediate_s11_column_name(column) for column in columns
+        )
+        report.write("\t".join(headers) + "\n")
+        with open(spool_path, "r") as spool:
+            for line in spool:
+                fields = line.rstrip("\r\n").split("\t")
+                if len(fields) < 5:
+                    continue
+                row = fields[:5] + [""] * len(columns)
+                index = 5
+                while index + 1 < len(fields):
+                    section_id = int(fields[index])
+                    output_index = column_by_id.get(section_id)
+                    if output_index is not None:
+                        row[5 + output_index] = fields[index + 1]
+                    index += 2
+                report.write("\t".join(row) + "\n")
 
 
 def sorted_locations(locations, route_distances):
@@ -1159,14 +1276,14 @@ def sorted_locations(locations, route_distances):
 
 
 def scan_step_s11_envelope(
-    step_name,
-    role,
+    step_number,
     frames,
     instance,
     output_nodes,
     output_element_labels,
     route_distances,
-    intermediate,
+    intermediate_spool,
+    intermediate_catalog,
     precision,
 ):
     maximum_by_location = {}
@@ -1174,12 +1291,6 @@ def scan_step_s11_envelope(
     section_labels = {}
     source_names = set()
     sample_count = 0
-    if intermediate is not None:
-        intermediate.write("RAW S11 - {0} STEP: {1}\n".format(role, step_name))
-        intermediate.write(
-            "Step Role\tStep Name\tFrame Index\tFrame Time\tPath Distance\t"
-            "Node Label\tElement Label\tSection Point\tS11\n"
-        )
     for frame_index, frame in enumerate(frames):
         values, frame_sections, source = extract_s11_locations(
             frame,
@@ -1189,6 +1300,7 @@ def scan_step_s11_envelope(
         )
         if source:
             source_names.add(source)
+        frame_rows = {}
         for location in sorted_locations(values.keys(), route_distances):
             value = values[location]
             sample_count += 1
@@ -1203,21 +1315,36 @@ def scan_step_s11_envelope(
                     "value": value,
                     "section": section_label,
                 }
-            if intermediate is not None:
-                row = (
-                    role,
-                    str(step_name),
-                    str(frame_index),
-                    scientific_text(frame_time(frame), precision),
-                    scientific_text(route_distances.get(location[0]), precision),
-                    str(location[0]),
-                    str(location[1]),
-                    section_label,
-                    scientific_text(value, precision),
+            if intermediate_spool is not None:
+                section_id = add_intermediate_section(
+                    intermediate_catalog, location[2], section_label
                 )
-                intermediate.write("\t".join(row) + "\n")
-    if intermediate is not None:
-        intermediate.write("\n")
+                base = (location[0], location[1])
+                frame_rows.setdefault(base, {})[section_id] = value
+        if intermediate_spool is not None:
+            for base in sorted(
+                frame_rows.keys(),
+                key=lambda item: (
+                    route_distances.get(item[0], float("inf")),
+                    item[0],
+                    item[1],
+                ),
+            ):
+                row = [
+                    scientific_text(route_distances.get(base[0]), precision),
+                    str(base[0]),
+                    str(base[1]),
+                    str(step_number),
+                    str(frame_index),
+                ]
+                for section_id in sorted(frame_rows[base].keys()):
+                    row.append(str(section_id))
+                    row.append(
+                        scientific_text(
+                            frame_rows[base][section_id], precision
+                        )
+                    )
+                intermediate_spool.write("\t".join(row) + "\n")
     return {
         "maximum": maximum_by_location,
         "control": control_by_location,
@@ -1243,6 +1370,9 @@ def calculate_pair_profile(
 ):
     first_frames = odb.steps[first_name].frames
     second_frames = odb.steps[second_name].frames
+    step_names = list(odb.steps.keys())
+    first_step_number = step_names.index(first_name) + 1
+    second_step_number = step_names.index(second_name) + 1
     if not first_frames or not second_frames:
         raise ValueError(
             "Step pair '{0}' -> '{1}' cannot be compared because one or "
@@ -1252,8 +1382,14 @@ def calculate_pair_profile(
     control_by_node = {}
     delta_by_location = {}
     matched_section_labels = {}
-    intermediate = None
     intermediate_output = None
+    intermediate_spool = None
+    intermediate_spool_path = None
+    intermediate_catalog = {
+        "identity_to_id": {},
+        "id_to_identity": {},
+        "labels": {},
+    }
     try:
         if write_intermediate:
             intermediate_output = intermediate_path(
@@ -1263,33 +1399,32 @@ def calculate_pair_profile(
                 first_name,
                 second_name,
             )
-            intermediate = open_intermediate_report(
-                intermediate_output,
-                odb_path,
-                instance.name,
-                first_name,
-                second_name,
+            spool_descriptor, intermediate_spool_path = tempfile.mkstemp(
+                prefix="s11_intermediate_",
+                suffix=".tmp",
+                dir=output_dir,
             )
+            intermediate_spool = os.fdopen(spool_descriptor, "w")
         first_envelope = scan_step_s11_envelope(
-            first_name,
-            "FIRST",
+            first_step_number,
             first_frames,
             instance,
             output_nodes,
             output_element_labels,
             route_distances,
-            intermediate,
+            intermediate_spool,
+            intermediate_catalog,
             precision,
         )
         second_envelope = scan_step_s11_envelope(
-            second_name,
-            "SECOND",
+            second_step_number,
             second_frames,
             instance,
             output_nodes,
             output_element_labels,
             route_distances,
-            intermediate,
+            intermediate_spool,
+            intermediate_catalog,
             precision,
         )
         first_values = first_envelope["maximum"]
@@ -1328,47 +1463,28 @@ def calculate_pair_profile(
                     "second": second_value,
                     "delta": delta,
                 }
-        if intermediate is not None:
-            intermediate.write("MATCHED LOCATION ENVELOPES AND DELTA S11\n")
-            intermediate.write(
-                "Path Distance\tNode Label\tElement Label\tSection Point\t"
-                "Maximum S11 First\tFirst Controlling Frame\t"
-                "First Controlling Frame Time\tMaximum S11 Second\t"
-                "Second Controlling Frame\tSecond Controlling Frame Time\t"
-                "Delta S11\n"
+        if intermediate_spool is not None:
+            intermediate_spool.close()
+            intermediate_spool = None
+            write_intermediate_report(
+                intermediate_output,
+                intermediate_spool_path,
+                intermediate_catalog,
+                odb_path,
+                instance.name,
+                first_name,
+                first_step_number,
+                second_name,
+                second_step_number,
             )
-            union_locations = first_locations.union(second_locations)
-            for location in sorted_locations(union_locations, route_distances):
-                first_value = first_values.get(location)
-                second_value = second_values.get(location)
-                first_control = first_envelope["control"].get(location, {})
-                second_control = second_envelope["control"].get(location, {})
-                delta = (
-                    first_value - second_value
-                    if first_value is not None and second_value is not None
-                    else None
-                )
-                section_label = second_envelope["sections"].get(
-                    location,
-                    first_envelope["sections"].get(location, ""),
-                )
-                row = (
-                    scientific_text(route_distances.get(location[0]), precision),
-                    str(location[0]),
-                    str(location[1]),
-                    section_label,
-                    scientific_text(first_value, precision),
-                    str(first_control.get("frame", "")),
-                    scientific_text(first_control.get("time"), precision),
-                    scientific_text(second_value, precision),
-                    str(second_control.get("frame", "")),
-                    scientific_text(second_control.get("time"), precision),
-                    scientific_text(delta, precision),
-                )
-                intermediate.write("\t".join(row) + "\n")
     finally:
-        if intermediate is not None:
-            intermediate.close()
+        if intermediate_spool is not None:
+            intermediate_spool.close()
+        if (
+            intermediate_spool_path is not None
+            and os.path.isfile(intermediate_spool_path)
+        ):
+            os.remove(intermediate_spool_path)
     source_names = first_envelope["sources"].union(second_envelope["sources"])
     return {
         "first": first_name,
@@ -1461,12 +1577,17 @@ def radius_values_match(first, second):
     return abs(first - second) <= tolerance
 
 
-def target_angle(value):
+def normalize_section_angle(value):
     normalized = float(value)
     while normalized <= -180.0:
         normalized += 360.0
     while normalized > 180.0:
         normalized -= 360.0
+    return normalized
+
+
+def target_angle(value):
+    normalized = normalize_section_angle(value)
     for requested in TARGET_ANGLES:
         if abs(normalized - float(requested)) <= 1.0e-5:
             return requested
