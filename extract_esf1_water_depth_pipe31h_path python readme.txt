@@ -6,15 +6,18 @@ Purpose
 
 extract_esf1_water_depth_pipe31h_path.py outputs:
 
-- cumulative pipeline path distance;
-- node label;
-- Water Depth Z at the final frame of a user-selected as-laid step; and
-- ESF1 for every selected step, or every ODB step by default.
+- one row per selected PIPE31H element at its pipeline midpoint distance;
+- element label and element node labels;
+- midpoint Water Depth Z at the final frame of a user-selected as-laid step;
+  and
+- one ESF1 value per element for every selected step, or every ODB step by
+  default.
 
 The path runs from one start node to one end node through connected PIPE31H
 elements. The script is self-contained and does not require another Python
-script. Version 2026-09-05-r3 creates both a text report and an Excel workbook
-with native, editable charts.
+script. Version 2026-09-07-r4 creates both a text report and an Excel workbook
+with native, editable charts and does not average adjacent element results at
+their shared node.
 
 
 Required as-laid step input
@@ -35,10 +38,12 @@ The water depth is always taken from the final frame of this as-laid step. The
 --frame-index option does not change the as-laid frame; it applies only to the
 ESF1 steps.
 
-For each output node, the script first uses COORD3 from the final as-laid frame.
-If COORD is unavailable for that node, it uses original coordinate Z + U3 from
-the same final frame. The Z sign and model length units are preserved. The
-script reports which source was used.
+For each source path node, the script first uses COORD3 from the final as-laid
+frame. If COORD is unavailable for that node, it uses original coordinate Z +
+U3 from the same final frame. For a two-node element, midpoint Water Depth Z is
+the mean of its two end-node depths. For a complete three-node quadratic
+element, the actual midside-node depth is used. The Z sign and model length
+units are preserved. The script reports which source was used.
 
 
 Default behavior
@@ -51,6 +56,14 @@ outputs all PIPE31H elements on the resolved start-to-end route.
 For ESF1, the default is the last frame containing ESF1 in each step. Path
 distance is cumulative 3D distance calculated from the original ODB nodal
 coordinates. Water Depth Z comes only from the final frame of --aslaid-step.
+
+One ESF1 value is output for each selected PIPE31H element. The script gathers
+only finite ELEMENT_NODAL ESF1 contributions carrying that same element label
+and averages those contributions within the element. It never combines the
+ESF1 of adjacent elements at their shared node. Each value is plotted at the
+mean of the full-route distances at that element's first and last route nodes.
+Therefore, localized high or low forces are not smoothed with the neighboring
+pipe element.
 
 
 Run the extraction
@@ -209,9 +222,10 @@ For each ODB, the default output names are:
 model.odb -> model_PIPE31H_ESF1_WATER_DEPTH_PATH.rpt
 model.odb -> model_PIPE31H_ESF1_WATER_DEPTH_PATH.xlsx
 
-The table contains Path Distance, Node Label, final as-laid Water Depth Z, and
-one ESF1 column per selected/default step. A blank ESF1 cell means that no
-selected element-nodal value was available at that node and frame.
+The table contains Element Midpoint Distance, Element Label, Element Node
+Labels, final as-laid Midpoint Water Depth Z, and one ESF1 column per
+selected/default step. A blank ESF1 cell means that no finite selected
+element-nodal value was available within that element and frame.
 
 Reports are written beside the ODB unless --output-dir is supplied. For a
 single --odb run, use a custom text-report name with:
@@ -228,10 +242,13 @@ Excel workbook and plots
 
 The Path Data worksheet contains:
 
-- Path Distance;
-- Node Label;
-- Water Depth Z from the final frame of the selected as-laid step; and
-- one ESF1 column for every selected step, or every usable step by default.
+- Element Midpoint Distance;
+- Element Label;
+- Element Node Labels;
+- Midpoint Water Depth Z from the final frame of the selected as-laid step;
+  and
+- one element-based ESF1 column for every selected step, or every usable step
+  by default.
 
 It contains two native Excel scatter charts:
 
@@ -297,4 +314,5 @@ Troubleshooting
 7. ESF1 cells are blank
 
    Confirm ESF1 was requested as field output for the selected PIPE31H elements
-   and selected frame. The console reports the number of blank step/node cells.
+   and selected frame. The console reports the number of blank step/element
+   cells.

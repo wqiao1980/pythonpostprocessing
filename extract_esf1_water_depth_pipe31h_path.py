@@ -1,12 +1,14 @@
 from __future__ import print_function
 
-"""Extract ESF1 and final as-laid water depth along a PIPE31H path.
+"""Extract element-midpoint ESF1 and water depth along a PIPE31H path.
 
 The script is self-contained and runs with ``abaqus python``. By default it
 processes every step and every PIPE31H element on the resolved start-to-end
 route. Element sets, exact element labels, and inclusive label ranges may be
-used to restrict output without resetting the full-route path distance. It
-creates a text report and an Excel workbook with native, editable charts.
+used to restrict output without resetting the full-route path distance. One
+ESF1 value is reported per PIPE31H element at its path midpoint; values from
+adjacent elements are never averaged together at their shared node. It creates
+a text report and an Excel workbook with native, editable charts.
 Water depth is Z in the final frame of the user-selected as-laid step.
 """
 
@@ -24,7 +26,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-05-r3"
+SCRIPT_VERSION = "2026-09-07-r4"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_ELEMENT_TYPE = "PIPE31H"
 DEFAULT_FRAME_INDEX = -1
@@ -609,6 +611,63 @@ def route_element_labels(route, edge_elements):
     return labels
 
 
+def element_midpoint_locations(
+    route, route_distances, pipe_elements, output_element_labels
+):
+    """Return selected elements in increasing midpoint-distance order."""
+    route_index = dict(
+        (node_label, index) for index, node_label in enumerate(route)
+    )
+    locations = []
+    for element_label in output_element_labels:
+        element = pipe_elements[element_label]
+        physical_order = physical_node_order(element)
+        if physical_order is None:
+            continue
+        path_nodes = []
+        seen_nodes = set()
+        for node_label in physical_order:
+            if node_label in route_distances and node_label not in seen_nodes:
+                seen_nodes.add(node_label)
+                path_nodes.append(node_label)
+        path_nodes.sort(key=lambda label: route_index[label])
+        if len(path_nodes) < 2:
+            continue
+
+        first_node = path_nodes[0]
+        last_node = path_nodes[-1]
+        midpoint_distance = 0.5 * (
+            route_distances[first_node] + route_distances[last_node]
+        )
+
+        # A complete three-node quadratic element has an actual midside node.
+        # Use that node for midpoint water depth. A two-node element (or a
+        # route that starts/ends inside a quadratic element) uses linear
+        # interpolation between the two route-end depths instead.
+        midpoint_node = None
+        if (
+            len(physical_order) == 3
+            and len(path_nodes) == 3
+            and physical_order[1] in path_nodes
+        ):
+            midpoint_node = physical_order[1]
+
+        locations.append(
+            {
+                "distance": midpoint_distance,
+                "element_label": int(element_label),
+                "node_labels": tuple(path_nodes),
+                "first_node": first_node,
+                "last_node": last_node,
+                "midpoint_node": midpoint_node,
+            }
+        )
+    locations.sort(
+        key=lambda item: (item["distance"], item["element_label"])
+    )
+    return locations
+
+
 def flattened_element_labels(container):
     if container is None:
         return
@@ -1064,24 +1123,22 @@ def field_value_scalar(value):
     return values[0]
 
 
-def average_esf1_at_nodes(
-    field_output, instance_name, output_nodes, output_element_labels
+def average_esf1_within_elements(
+    field_output, instance_name, output_element_labels
 ):
-    target_nodes = set(output_nodes)
-    contributions = dict((label, []) for label in output_nodes)
+    """Return one ESF1 value per element without shared-node averaging."""
+    contributions = dict(
+        (label, []) for label in output_element_labels
+    )
     element_nodal = field_output.getSubset(
         position=ELEMENT_NODAL, readOnly=ON
     )
     for value in element_nodal.values:
         try:
-            node_label = int(value.nodeLabel)
             element_label = int(value.elementLabel)
         except Exception:
             continue
-        if (
-            node_label not in target_nodes
-            or element_label not in output_element_labels
-        ):
+        if element_label not in contributions:
             continue
         value_instance = getattr(value, "instance", None)
         if (
@@ -1092,16 +1149,34 @@ def average_esf1_at_nodes(
         scalar = field_value_scalar(value)
         if math.isnan(scalar) or math.isinf(scalar):
             continue
-        contributions[node_label].append(scalar)
+        contributions[element_label].append(scalar)
 
-    values_by_node = {}
-    counts_by_node = {}
-    for node_label in output_nodes:
-        values = contributions[node_label]
+    values_by_element = {}
+    counts_by_element = {}
+    for element_label in output_element_labels:
+        values = contributions[element_label]
         if values:
-            values_by_node[node_label] = sum(values) / float(len(values))
-            counts_by_node[node_label] = len(values)
-    return values_by_node, counts_by_node
+            values_by_element[element_label] = sum(values) / float(
+                len(values)
+            )
+            counts_by_element[element_label] = len(values)
+    return values_by_element, counts_by_element
+
+
+def element_midpoint_water_depths(element_locations, nodal_water_depths):
+    """Interpolate final as-laid water depth to each element midpoint."""
+    values = {}
+    for location in element_locations:
+        element_label = location["element_label"]
+        midpoint_node = location["midpoint_node"]
+        if midpoint_node is not None:
+            values[element_label] = nodal_water_depths[midpoint_node]
+        else:
+            values[element_label] = 0.5 * (
+                nodal_water_depths[location["first_node"]]
+                + nodal_water_depths[location["last_node"]]
+            )
+    return values
 
 
 def engineering_format(value):
@@ -1276,14 +1351,13 @@ def xlsx_styles_xml():
 
 def xlsx_worksheet_xml(
     odb_name,
-    output_nodes,
-    route_distances,
-    water_depths,
+    element_locations,
+    element_water_depths,
     aslaid_step_name,
     extracted_frames,
 ):
-    last_column = 3 + len(extracted_frames)
-    last_row = 4 + len(output_nodes)
+    last_column = 4 + len(extracted_frames)
+    last_row = 4 + len(element_locations)
     rows = [
         '<row r="1" ht="22" customHeight="1">{0}</row>'.format(
             xlsx_inline_cell(
@@ -1299,7 +1373,7 @@ def xlsx_worksheet_xml(
             xlsx_inline_cell(
                 2,
                 1,
-                "Water Depth Z is from the final frame of as-laid step {0}; charts are native and editable in Excel".format(
+                "One ESF1 value per PIPE31H element at its path midpoint; Water Depth Z is from the final frame of as-laid step {0}".format(
                     aslaid_step_name
                 ),
                 2,
@@ -1307,16 +1381,19 @@ def xlsx_worksheet_xml(
         ),
     ]
     headers = [
-        xlsx_inline_cell(4, 1, "Path Distance", 3),
-        xlsx_inline_cell(4, 2, "Node Label", 3),
+        xlsx_inline_cell(4, 1, "Element Midpoint Distance", 3),
+        xlsx_inline_cell(4, 2, "Element Label", 3),
+        xlsx_inline_cell(4, 3, "Element Node Labels", 3),
         xlsx_inline_cell(
             4,
-            3,
-            "Water Depth Z ({0}, final)".format(aslaid_step_name),
+            4,
+            "Midpoint Water Depth Z ({0}, final)".format(
+                aslaid_step_name
+            ),
             3,
         ),
     ]
-    for column_number, extracted in enumerate(extracted_frames, 4):
+    for column_number, extracted in enumerate(extracted_frames, 5):
         headers.append(
             xlsx_inline_cell(
                 4, column_number, extracted[0] + " ESF1", 3
@@ -1327,23 +1404,32 @@ def xlsx_worksheet_xml(
             "".join(headers)
         )
     )
-    for row_number, node_label in enumerate(output_nodes, 5):
+    for row_number, location in enumerate(element_locations, 5):
+        element_label = location["element_label"]
         cells = [
             xlsx_number_cell(
-                row_number, 1, route_distances[node_label], 4
+                row_number, 1, location["distance"], 4
             ),
-            xlsx_number_cell(row_number, 2, node_label, 0),
+            xlsx_number_cell(row_number, 2, element_label, 0),
+            xlsx_inline_cell(
+                row_number,
+                3,
+                ",".join(
+                    str(label) for label in location["node_labels"]
+                ),
+                0,
+            ),
             xlsx_number_cell(
-                row_number, 3, water_depths[node_label], 4
+                row_number, 4, element_water_depths[element_label], 4
             ),
         ]
-        for column_number, extracted in enumerate(extracted_frames, 4):
-            values_by_node = extracted[3]
+        for column_number, extracted in enumerate(extracted_frames, 5):
+            values_by_element = extracted[3]
             cells.append(
                 xlsx_number_cell(
                     row_number,
                     column_number,
-                    values_by_node.get(node_label),
+                    values_by_element.get(element_label),
                     5,
                 )
             )
@@ -1357,7 +1443,7 @@ def xlsx_worksheet_xml(
   <dimension ref="A1:{0}{1}"/>
   <sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
   <sheetFormatPr defaultRowHeight="15"/>
-  <cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="13" customWidth="1"/><col min="3" max="3" width="17" customWidth="1"/><col min="4" max="{2}" width="20" customWidth="1"/></cols>
+  <cols><col min="1" max="1" width="24" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/><col min="3" max="3" width="24" customWidth="1"/><col min="4" max="4" width="24" customWidth="1"/><col min="5" max="{2}" width="20" customWidth="1"/></cols>
   <sheetData>{3}</sheetData><autoFilter ref="A4:{0}{1}"/><drawing r:id="rId1"/>
 </worksheet>""".format(
         excel_column_name(last_column),
@@ -1415,15 +1501,17 @@ def xlsx_chart_series_xml(
     series_index,
     name,
     value_column,
-    output_nodes,
-    route_distances,
-    values_by_node,
+    element_locations,
+    values_by_element,
 ):
     data_start_row = 5
-    data_end_row = 4 + len(output_nodes)
+    data_end_row = 4 + len(element_locations)
     column_letter = excel_column_name(value_column)
-    x_values = [route_distances[label] for label in output_nodes]
-    y_values = [values_by_node.get(label) for label in output_nodes]
+    x_values = [location["distance"] for location in element_locations]
+    y_values = [
+        values_by_element.get(location["element_label"])
+        for location in element_locations
+    ]
     color = EXCEL_CHART_COLORS[
         series_index % len(EXCEL_CHART_COLORS)
     ]
@@ -1548,46 +1636,39 @@ def xlsx_combined_esf_water_chart_xml(
 def write_excel_workbook(
     excel_path,
     odb_name,
-    output_nodes,
-    route_distances,
-    water_depths,
+    element_locations,
+    element_water_depths,
     aslaid_step_name,
     extracted_frames,
 ):
     esf_series = []
     for series_index, extracted in enumerate(extracted_frames):
         step_name = extracted[0]
-        values_by_node = extracted[3]
+        values_by_element = extracted[3]
         esf_series.append(
             xlsx_chart_series_xml(
                 series_index,
                 step_name + " ESF1",
-                4 + series_index,
-                output_nodes,
-                route_distances,
-                values_by_node,
+                5 + series_index,
+                element_locations,
+                values_by_element,
             )
         )
-    water_values = dict(
-        (label, water_depths[label]) for label in output_nodes
-    )
     water_series = xlsx_chart_series_xml(
         0,
-        "Water Depth Z ({0}, final)".format(aslaid_step_name),
-        3,
-        output_nodes,
-        route_distances,
-        water_values,
+        "Midpoint Water Depth Z ({0}, final)".format(aslaid_step_name),
+        4,
+        element_locations,
+        element_water_depths,
     )
     combined_water_series = xlsx_chart_series_xml(
         len(extracted_frames),
-        "Water Depth Z ({0}, final)".format(aslaid_step_name),
-        3,
-        output_nodes,
-        route_distances,
-        water_values,
+        "Midpoint Water Depth Z ({0}, final)".format(aslaid_step_name),
+        4,
+        element_locations,
+        element_water_depths,
     )
-    start_column = 4 + len(extracted_frames)
+    start_column = 5 + len(extracted_frames)
 
     with zipfile.ZipFile(excel_path, "w", zipfile.ZIP_DEFLATED) as workbook:
         workbook.writestr(
@@ -1617,9 +1698,8 @@ def write_excel_workbook(
             xlsx_bytes(
                 xlsx_worksheet_xml(
                     odb_name,
-                    output_nodes,
-                    route_distances,
-                    water_depths,
+                    element_locations,
+                    element_water_depths,
                     aslaid_step_name,
                     extracted_frames,
                 )
@@ -1669,21 +1749,22 @@ def write_excel_workbook(
 
 def write_table(
     report_file,
-    output_nodes,
-    route_distances,
-    water_depths,
+    element_locations,
+    element_water_depths,
     extracted_frames,
 ):
-    fixed_widths = (18, 14, 18)
+    fixed_widths = (26, 16, 24, 24)
     step_width = 20
     header = (
-        "{0:>{w0}}{1:>{w1}}{2:>{w2}}".format(
-            "Path Distance",
-            "Node Label",
-            "Water Depth Z",
+        "{0:>{w0}}{1:>{w1}}{2:>{w2}}{3:>{w3}}".format(
+            "Element Midpoint Distance",
+            "Element Label",
+            "Element Node Labels",
+            "Midpoint Water Depth Z",
             w0=fixed_widths[0],
             w1=fixed_widths[1],
             w2=fixed_widths[2],
+            w3=fixed_widths[3],
         )
         + "".join(
             "{0:>{width}}".format(step_name + " ESF1", width=step_width)
@@ -1693,71 +1774,89 @@ def write_table(
     )
     report_file.write(header + "\n")
     report_file.write("-" * len(header) + "\n")
-    for node_label in output_nodes:
+    for location in element_locations:
+        element_label = location["element_label"]
+        node_labels = ",".join(
+            str(label) for label in location["node_labels"]
+        )
         line = (
-            "{0:>{w0}}{1:>{w1}d}{2:>{w2}}".format(
-                engineering_format(route_distances[node_label]),
-                node_label,
-                engineering_format(water_depths[node_label]),
+            "{0:>{w0}}{1:>{w1}d}{2:>{w2}}{3:>{w3}}".format(
+                engineering_format(location["distance"]),
+                element_label,
+                node_labels,
+                engineering_format(element_water_depths[element_label]),
                 w0=fixed_widths[0],
                 w1=fixed_widths[1],
                 w2=fixed_widths[2],
+                w3=fixed_widths[3],
             )
         )
         for (
             unused_step,
             unused_index,
             unused_frame,
-            values_by_node,
+            values_by_element,
             unused_counts,
         ) in extracted_frames:
             line += "{0:>{width}}".format(
-                engineering_format(values_by_node.get(node_label)),
+                engineering_format(values_by_element.get(element_label)),
                 width=step_width,
             )
         report_file.write(line + "\n")
     report_file.write("\n")
 
 
-def write_summaries(report_file, route_distances, extracted_frames):
+def write_summaries(report_file, element_locations, extracted_frames):
+    location_by_element = dict(
+        (location["element_label"], location)
+        for location in element_locations
+    )
     for (
         step_name,
         frame_index,
         unused_frame,
-        values_by_node,
+        values_by_element,
         unused_counts,
     ) in extracted_frames:
-        if not values_by_node:
+        if not values_by_element:
             report_file.write(
                 "{0} (frame {1}): no ESF1 values available\n".format(
                     step_name, frame_index
                 )
             )
             continue
-        minimum_node = min(
-            values_by_node, key=lambda label: values_by_node[label]
+        minimum_element = min(
+            values_by_element,
+            key=lambda label: values_by_element[label],
         )
-        maximum_node = max(
-            values_by_node, key=lambda label: values_by_node[label]
+        maximum_element = max(
+            values_by_element,
+            key=lambda label: values_by_element[label],
         )
         report_file.write(
-            "{0} (frame {1}) minimum ESF1: {2} at distance {3}, node "
+            "{0} (frame {1}) minimum ESF1: {2} at midpoint distance {3}, "
+            "element "
             "{4}\n".format(
                 step_name,
                 frame_index,
-                engineering_format(values_by_node[minimum_node]),
-                engineering_format(route_distances[minimum_node]),
-                minimum_node,
+                engineering_format(values_by_element[minimum_element]),
+                engineering_format(
+                    location_by_element[minimum_element]["distance"]
+                ),
+                minimum_element,
             )
         )
         report_file.write(
-            "{0} (frame {1}) maximum ESF1: {2} at distance {3}, node "
+            "{0} (frame {1}) maximum ESF1: {2} at midpoint distance {3}, "
+            "element "
             "{4}\n".format(
                 step_name,
                 frame_index,
-                engineering_format(values_by_node[maximum_node]),
-                engineering_format(route_distances[maximum_node]),
-                maximum_node,
+                engineering_format(values_by_element[maximum_element]),
+                engineering_format(
+                    location_by_element[maximum_element]["distance"]
+                ),
+                maximum_element,
             )
         )
 
@@ -1840,13 +1939,29 @@ def write_report(
                 "to node {1}.".format(start_label, end_label)
             )
 
-        output_node_set = set()
-        for element_label in output_element_labels:
-            output_node_set.update(
-                int(label)
-                for label in pipe_elements[element_label].connectivity
-                if int(label) in route_distances
+        element_locations = element_midpoint_locations(
+            route,
+            route_distances,
+            pipe_elements,
+            output_element_labels,
+        )
+        if len(element_locations) != len(output_element_labels):
+            located_labels = set(
+                location["element_label"] for location in element_locations
             )
+            missing_labels = sorted(
+                output_element_labels.difference(located_labels)
+            )
+            raise ValueError(
+                "Could not establish a midpoint on the resolved route for "
+                "PIPE31H element(s): {0}".format(
+                    ", ".join(str(label) for label in missing_labels)
+                )
+            )
+
+        output_node_set = set()
+        for location in element_locations:
+            output_node_set.update(location["node_labels"])
         output_nodes = [
             node_label for node_label in route if node_label in output_node_set
         ]
@@ -1856,7 +1971,7 @@ def write_report(
             available_steps, requested_aslaid_step
         )
         (
-            water_depths,
+            nodal_water_depths,
             water_depth_source,
             aslaid_frame_index,
             aslaid_frame_description,
@@ -1866,6 +1981,9 @@ def write_report(
             instance_key,
             output_nodes,
             coordinates,
+        )
+        element_water_depths = element_midpoint_water_depths(
+            element_locations, nodal_water_depths
         )
         selected_steps, step_notes = select_steps(
             available_steps, requested_steps, step_range
@@ -1888,19 +2006,20 @@ def write_report(
 
         extracted_frames = []
         for step_name, selected_frame_index, frame in selected_frames:
-            values_by_node, counts_by_node = average_esf1_at_nodes(
+            values_by_element, counts_by_element = (
+                average_esf1_within_elements(
                 frame.fieldOutputs["ESF1"],
                 instance_key,
-                output_nodes,
                 output_element_labels,
+            )
             )
             extracted_frames.append(
                 (
                     step_name,
                     selected_frame_index,
                     frame,
-                    values_by_node,
-                    counts_by_node,
+                    values_by_element,
+                    counts_by_element,
                 )
             )
 
@@ -1938,8 +2057,9 @@ def write_report(
                 )
             )
             report_file.write(
-                "Output: {0} PIPE31H element(s), {1} route node(s)\n".format(
-                    len(output_element_labels), len(output_nodes)
+                "Output: {0} PIPE31H element midpoint(s), {1} source "
+                "route node(s)\n".format(
+                    len(element_locations), len(output_nodes)
                 )
             )
             report_file.write(
@@ -1961,8 +2081,18 @@ def write_report(
                 "Water Depth Z sign and model length units are unchanged\n"
             )
             report_file.write(
-                "ESF1: element-nodal values averaged using output elements "
-                "only\n"
+                "ESF1: one value per output element; finite element-nodal "
+                "contributions are averaged within that element only; "
+                "adjacent elements are never averaged together\n"
+            )
+            report_file.write(
+                "Element midpoint distance: mean of the route distances at "
+                "the element's first and last route nodes\n"
+            )
+            report_file.write(
+                "Midpoint Water Depth Z: actual midside-node Z for complete "
+                "three-node elements; otherwise mean of the two element-end "
+                "depths\n"
             )
             if unsupported_elements:
                 report_file.write(
@@ -1984,22 +2114,20 @@ def write_report(
             report_file.write("\n")
             write_table(
                 report_file,
-                output_nodes,
-                route_distances,
-                water_depths,
+                element_locations,
+                element_water_depths,
                 extracted_frames,
             )
             write_summaries(
-                report_file, route_distances, extracted_frames
+                report_file, element_locations, extracted_frames
             )
 
         odb_stem = os.path.splitext(os.path.basename(odb_path))[0]
         write_excel_workbook(
             excel_path,
             odb_stem,
-            output_nodes,
-            route_distances,
-            water_depths,
+            element_locations,
+            element_water_depths,
             aslaid_step_name,
             extracted_frames,
         )
@@ -2012,8 +2140,9 @@ def write_report(
             )
         )
         print(
-            "Output: {0} PIPE31H element(s), {1} path node(s)".format(
-                len(output_element_labels), len(output_nodes)
+            "Output: {0} PIPE31H element midpoint(s), {1} source path "
+            "node(s)".format(
+                len(element_locations), len(output_nodes)
             )
         )
         print(
@@ -2030,14 +2159,15 @@ def write_report(
         for skipped_step, reason in skipped_steps:
             print("Skipped step '{0}': {1}.".format(skipped_step, reason))
         missing_total = sum(
-            len(output_nodes) - len(values_by_node)
-            for unused_step, unused_index, unused_frame, values_by_node, unused_counts
+            len(element_locations) - len(values_by_element)
+            for unused_step, unused_index, unused_frame, values_by_element, unused_counts
             in extracted_frames
         )
         if missing_total:
             print(
-                "Warning: {0} step/node ESF1 cell(s) are blank because no "
-                "selected element-nodal value was available.".format(
+                "Warning: {0} step/element ESF1 cell(s) are blank because "
+                "no finite element-nodal value was available within that "
+                "element.".format(
                     missing_total
                 )
             )
