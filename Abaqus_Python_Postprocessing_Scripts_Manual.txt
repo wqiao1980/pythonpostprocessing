@@ -1,0 +1,1429 @@
+Abaqus Python Postprocessing Scripts - Complete User Manual
+============================================================
+
+Manual date: 2026-09-07
+Script folder used in the examples:
+
+    C:\python_aba\takeoutSFSM
+
+This manual covers all 12 Python postprocessing scripts currently in that
+folder. It describes what each script does, whether it imports another local
+script, the complete command-line option set, practical command examples, the
+help command, console/log capture, and how to stop a running extraction.
+
+
+CONTENTS
+========
+
+1. General rules and quick start
+2. Dependency summary
+3. Step, frame, element, path, and output conventions
+4. How to stop a running script
+5. Script reference
+   5.1  extract_sfsm_reports.py
+   5.2  extract_sfsm_reports_selected_steps.py
+   5.3  extract_sfsm_reports_selected_steps_elements.py
+   5.4  extract_le11_the11_selected_steps.py
+   5.5  extract_le11_the11_selected_steps_pipe_only.py
+   5.6  extract_u2_local_selected_steps.py
+   5.7  extract_cpress_copen_pipe_selected_steps.py
+   5.8  extract_esf1_water_depth_pipe31h_path.py
+   5.9  extract_lccdcc_pipe_input.py
+   5.10 extract_pipe_connector_spring_history.py
+   5.11 extract_pipe_s11_delta_step_pairs.py
+   5.12 extract_pipe_s11_delta_step_pairs_four_angles.py
+6. Command index by function
+7. Troubleshooting command-line problems
+
+
+1. GENERAL RULES AND QUICK START
+================================
+
+Use an Abaqus Command Prompt, not an ordinary Python installation. The ODB
+modules are supplied by Abaqus.
+
+To work from the script folder:
+
+    cd /d "C:\python_aba\takeoutSFSM"
+
+Eleven scripts use this launcher:
+
+    abaqus python "C:\python_aba\takeoutSFSM\SCRIPT_NAME.py" [script options]
+
+The local-U2 script is the only exception. It needs Abaqus/Viewer's NODAL
+transformation and uses:
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- [script options]
+
+The standalone -- before the U2 script options is required. For example:
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+If the separator is omitted, Abaqus may interpret --output-dir as a Viewer
+option and report that command-line option "-output-dir" may not be used with
+Viewer.
+
+Help for an abaqus-python script:
+
+    abaqus python "C:\python_aba\takeoutSFSM\SCRIPT_NAME.py" --help
+
+Help for the U2 Viewer script:
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --help
+
+Quote every path or name that contains spaces. Examples in this manual use:
+
+    ODB input folder: C:\Data\ODBs
+    Output folder:    C:\Data\Results
+    One ODB:          model.odb
+    Instance:         PART-1-1
+
+Create the output folder before redirecting console text into it:
+
+    mkdir "C:\Data\Results"
+
+To capture everything displayed by Abaqus and the script:
+
+    abaqus python "C:\python_aba\takeoutSFSM\SCRIPT_NAME.py" [options] > "C:\Data\Results\console.txt" 2>&1
+
+Use > to overwrite the console file. Use >> to append to it.
+
+
+2. DEPENDENCY SUMMARY
+=====================
+
+Script                                                   Local script dependency
+------                                                   -----------------------
+extract_sfsm_reports.py                                  None
+extract_sfsm_reports_selected_steps.py                   extract_sfsm_reports.py
+extract_sfsm_reports_selected_steps_elements.py          None
+extract_le11_the11_selected_steps.py                     None
+extract_le11_the11_selected_steps_pipe_only.py           None
+extract_u2_local_selected_steps.py                       extract_le11_the11_selected_steps.py
+extract_cpress_copen_pipe_selected_steps.py              extract_le11_the11_selected_steps_pipe_only.py
+extract_esf1_water_depth_pipe31h_path.py                  None
+extract_lccdcc_pipe_input.py                             None
+extract_pipe_connector_spring_history.py                 None
+extract_pipe_s11_delta_step_pairs.py                     None
+extract_pipe_s11_delta_step_pairs_four_angles.py         None
+
+All scripts require the Abaqus Python/ODB libraries. The word "None" means
+that the script does not import another local postprocessing script; it does
+not mean that it can run with ordinary system Python.
+
+Keep each dependent pair in the same folder:
+
+    extract_sfsm_reports_selected_steps.py
+    extract_sfsm_reports.py
+
+    extract_u2_local_selected_steps.py
+    extract_le11_the11_selected_steps.py
+
+    extract_cpress_copen_pipe_selected_steps.py
+    extract_le11_the11_selected_steps_pipe_only.py
+
+The dependencies are one-way. Running a helper by itself does not run its
+dependent script, and importing a helper does not start a second extraction.
+
+
+3. COMMON CONVENTIONS
+=====================
+
+ODB selection
+-------------
+
+For most scripts:
+
+* --input-dir identifies the folder searched for ODB files. If omitted, the
+  script's own folder is used.
+* --odb selects one ODB. A relative name is resolved under --input-dir.
+* Repeat --odb to process several named ODBs.
+* If --odb is omitted, every .odb directly in --input-dir is processed. The
+  search is not recursive.
+* --output-dir selects the output folder. If omitted, --input-dir is used.
+* --output-name is permitted only when exactly one --odb is supplied.
+
+Example, one ODB:
+
+    --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results"
+
+Example, two named ODBs:
+
+    --input-dir "C:\Data\ODBs" --odb "model1.odb" --odb "model2.odb" --output-dir "C:\Data\Results"
+
+Example, all ODBs in a folder:
+
+    --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+Step selection
+--------------
+
+Where supported, exact step names are entered after --steps:
+
+    --steps "Step-2" "Step-5" "Operation"
+
+An inclusive numeric range uses 1-based ODB step positions:
+
+    --step-range 3 7
+
+An inclusive named range uses the exact first and last step names:
+
+    --step-range "Preload" "Operation"
+
+To select one step by number on a script that has --step-range, enter the same
+position twice:
+
+    --step-range 7 7
+
+--steps and --step-range are alternatives; do not use both in one command.
+The S11 delta scripts are different: they use one or more --step-pair FIRST
+SECOND options, and FIRST/SECOND may be exact names or 1-based positions.
+
+Frame selection
+---------------
+
+Where --frame-index is available, it is zero-based:
+
+    --frame-index 0     first frame
+    --frame-index 1     second frame
+    --frame-index -1    last usable frame; this is the default
+
+The history and S11 delta scripts intentionally read all frames and therefore
+do not have --frame-index.
+
+Element selection
+-----------------
+
+Depending on the script, selectors are named --element..., --pipe-element...,
+--connector-element..., or --spring-element.... Repeat set/range options when
+necessary. Sets, exact labels, and ranges are combined as a union.
+
+    --element-set "SET_A" --element-set "SET_B"
+    --element 1001 1002 1005
+    --element-range 1001 1200 --element-range 2001 2200
+
+    --pipe-element-set "PIPE_SET"
+    --pipe-element 1001 1002
+    --pipe-element-range 1001 1200
+
+Path endpoints and distance
+---------------------------
+
+Scripts with start and end controls generally use this order:
+
+1. Exact labels from --start-node and --end-node.
+2. Exact node-set names from --start-node-set and --end-node-set.
+3. Unique node-set names containing START and END, case-insensitively.
+4. Suitable graph endpoints when the route is unambiguous.
+
+The start-set and end-set names do not have to be exactly START and END. Use
+the listing option to identify possible names, then specify the exact set if
+more than one name contains START or END.
+
+Path distance is cumulative 3D length along connected elements using original
+ODB nodal coordinates. It is not straight-line distance from the first node.
+
+Output and Excel
+----------------
+
+The .rpt and .txt files are plain/tab-delimited results. Excel .xlsx files
+contain native editable charts. Excel does not need to be installed or open
+while Abaqus produces them. Existing output files with the same names are
+overwritten, so close an output workbook in Excel before rerunning.
+
+
+4. HOW TO STOP A RUNNING SCRIPT
+===============================
+
+Preferred method
+----------------
+
+1. Click the running Abaqus Command Prompt so it has keyboard focus.
+2. Press Ctrl+C.
+3. If Windows asks "Terminate batch job (Y/N)?", type Y and press Enter.
+4. If Ctrl+C does not respond, try Ctrl+Break and wait briefly.
+
+Some ODB field reads execute inside Abaqus code, so interruption may not be
+recognized until the current read returns.
+
+Last-resort command from a second Command Prompt
+------------------------------------------------
+
+First list candidate processes and identify the exact PID belonging to the
+postprocessing command:
+
+    tasklist /V | findstr /I "abaqus viewer python"
+
+Then replace 12345 below with that exact PID:
+
+    taskkill /PID 12345 /T /F
+
+/T also terminates child processes and /F forces termination. Do not use a
+broad command such as taskkill /IM python.exe /F or taskkill /IM abq*.exe /F;
+it could stop another Abaqus analysis or an unrelated Python job.
+
+ODBs are opened read-only, so stopping postprocessing does not modify the ODB.
+The current .rpt, .txt, .xlsx, .log, or console file may be incomplete. Rerun
+the same command to overwrite it. A forced stop of an S11 delta run can leave
+an s11_intermediate_*.tmp file in the output folder; delete it only after
+confirming that the postprocessing process has stopped.
+
+
+5. SCRIPT REFERENCE
+===================
+
+
+5.1 extract_sfsm_reports.py
+---------------------------
+
+What it does
+
+Extracts ESF1, SF1, SF2, SF3, SM1, SM2, and SM3 at ELEMENT_NODAL position.
+Integration-point values are extrapolated to element nodes and contributions
+at each requested node are averaged. It processes all steps by default and
+uses the last frame containing all requested fields.
+
+Default node set: PART-1-1.START
+Default report for model.odb: model.rpt
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_sfsm_reports.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--node-set INSTANCE.SET]
+        [--steps STEP [STEP ...]]
+        [--frame-index INDEX]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --help
+
+All ODBs and all steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+One ODB
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results"
+
+Several named ODBs
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --odb "model1.odb" --odb "model2.odb" --output-dir "C:\Data\Results"
+
+Selected exact steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --steps "Step-6" "Step-7"
+
+Different node set and a particular zero-based frame
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --node-set "PART-1-1.PIPE_START" --frame-index 2
+
+Custom output name; one --odb is mandatory
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --output-name "custom_sfsm.rpt"
+
+Console capture
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports.py" --input-dir "C:\Data\ODBs" --odb "model.odb" > "C:\Data\Results\sfsm_console.txt" 2>&1
+
+
+5.2 extract_sfsm_reports_selected_steps.py
+------------------------------------------
+
+What it does
+
+Provides the same ESF1/SF/SM extraction as extract_sfsm_reports.py, plus step
+listing and inclusive step-range selection by name or 1-based position.
+
+Default node set: PART-1-1.START
+Default report for model.odb: model.rpt
+Launcher: abaqus python
+Dependency: extract_sfsm_reports.py in the same folder
+
+Complete option syntax
+
+    extract_sfsm_reports_selected_steps.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--node-set INSTANCE.SET]
+        [--frame-index INDEX]
+        [--list-steps]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --help
+
+List steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+All steps in all ODBs
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+Selected names
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --steps "Step-2" "Step-5" "Step-8"
+
+Numeric inclusive range
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range 3 7
+
+Named inclusive range
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range "Preload" "Operation"
+
+One step by position
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range 7 7
+
+Node set, frame, output folder, and custom report name
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --output-name "selected_sfsm.rpt" --node-set "PART-1-1.PIPE_START" --frame-index 1 --step-range 3 7
+
+
+5.3 extract_sfsm_reports_selected_steps_elements.py
+---------------------------------------------------
+
+What it does
+
+Self-contained ESF1/SF/SM extractor for selected steps and the union of
+element sets, exact element labels, and inclusive label ranges. If no element
+selector is entered, it retains the original PART-1-1.START node-set behavior.
+It is not restricted to PIPE element types.
+
+Default instance: PART-1-1
+Default fallback node set: PART-1-1.START
+Default report for model.odb: model_SFSM_SELECTED_ELEMENTS.rpt
+Diagnostic log: extract_sfsm_reports_selected_steps_elements.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_sfsm_reports_selected_steps_elements.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--node-set INSTANCE.SET]
+        [--element-set SET] ...
+        [--element LABEL [LABEL ...]] ...
+        [--element-range FIRST LAST] ...
+        [--frame-index INDEX]
+        [--list-steps]
+        [--list-element-sets]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --help
+
+List steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+List element sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-element-sets
+
+One or several sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-set "SET_A" --element-set "SET_B"
+
+Exact labels
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element 1001 1002 1005
+
+Inclusive ranges
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-range 1001 1200 --element-range 2001 2200
+
+Combine all element selector types and selected steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --element-set "SET_A" --element 1500 --element-range 2001 2200 --steps "Step-2" "Step-5"
+
+Numeric or named step range
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-set "SET_A" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-set "SET_A" --step-range "Preload" "Operation"
+
+No element selector: use the fallback node set
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --node-set "PART-1-1.START" --step-range 3 7
+
+Console capture; the diagnostic log is also written to --output-dir
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_sfsm_reports_selected_steps_elements.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --element-set "SET_A" > "C:\Data\Results\sfsm_elements_console.txt" 2>&1
+
+
+5.4 extract_le11_the11_selected_steps.py
+-----------------------------------------
+
+What it does
+
+Extracts LE11 and THE11 at every section point along connected two- or
+three-node line-element paths, calculates MECH11 = LE11 - THE11, reports each
+section point in adjacent LE11/THE11/MECH11 columns, and reports MAX_MECH11 at
+each path location. It creates an editable Excel chart of MAX_MECH11 for the
+selected steps. This original version is not PIPE-only.
+
+Default instance: PART-1-1
+Default start node set: START; automatic endpoint fallback if missing
+Default outputs for model.odb:
+    model_LE11_THE11_MECH11.rpt
+    model_MAX_MECH11_along_path.xlsx
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_le11_the11_selected_steps.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--start-node LABEL]
+        [--start-node-set SET]
+        [--frame-index INDEX]
+        [--average-section-points]
+        [--list-steps]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --help
+
+All ODBs and all steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+List steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+Selected step names
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --steps "Step-2" "Step-5"
+
+Numeric or named range
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range "Preload" "Operation"
+
+Explicit path start, frame, and section-point averaging
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --start-node 1001 --frame-index 2 --average-section-points
+
+Use a named path-start set
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --start-node-set "PIPE_START_NODE"
+
+Custom text-report name; the Excel name stays ODB-based
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --output-name "custom_strain.rpt"
+
+
+5.5 extract_le11_the11_selected_steps_pipe_only.py
+--------------------------------------------------
+
+What it does
+
+PIPE-only version of the preceding extractor. It constructs paths only from
+element types whose names begin with PIPE. It outputs section-point LE11,
+THE11, MECH11 = LE11 - THE11, MAX_MECH11 along the path, and an editable Excel
+MAX_MECH11 plot for all selected steps.
+
+Default instance: PART-1-1
+Default start node set: START; automatic endpoint fallback if missing
+Default outputs for model.odb:
+    model_PIPE_ONLY_LE11_THE11_MECH11.rpt
+    model_PIPE_ONLY_MAX_MECH11_along_path.xlsx
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_le11_the11_selected_steps_pipe_only.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--start-node LABEL]
+        [--start-node-set SET]
+        [--frame-index INDEX]
+        [--average-section-points]
+        [--list-steps]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --help
+
+All ODBs and all steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+List steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+Selected names, numeric range, or named range
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --steps "Step-2" "Step-5"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range "Preload" "Operation"
+
+Explicit start node and particular frame
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --start-node 1001 --frame-index 1
+
+Average all section points instead of separate section-point rows
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_le11_the11_selected_steps_pipe_only.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --average-section-points
+
+
+5.6 extract_u2_local_selected_steps.py
+--------------------------------------
+
+What it does
+
+Extracts local nodal U2 along PIPE-only paths. Abaqus NODAL transformation is
+used for nodes with *TRANSFORM; nodes without *TRANSFORM retain global U2,
+matching Viewer behavior. It writes a text report and an editable Excel plot.
+
+Default instance: PART-1-1
+Default start node set: START; automatic endpoint fallback if missing
+Default outputs for model.odb:
+    model_U2_LOCAL.rpt
+    model_U2_LOCAL_along_path.xlsx
+Diagnostic log: extract_u2_local_selected_steps.log
+Launcher: abaqus viewer noGUI=... --
+Dependency: extract_le11_the11_selected_steps.py in the same folder
+
+Complete option syntax
+
+    extract_u2_local_selected_steps.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--start-node LABEL]
+        [--start-node-set SET]
+        [--frame-index INDEX]
+        [--list-steps]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --help
+
+All ODBs and all steps
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+One ODB
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results"
+
+List steps
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+Selected step names
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --steps "Step-2" "Step-5"
+
+Numeric or named step range
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range 3 7
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range "Preload" "Operation"
+
+Start node/set and frame selection
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --start-node 1001 --frame-index 2
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --start-node-set "PIPE_START_NODE"
+
+Console capture; note that the redirection follows all Viewer/script options
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" > "C:\Data\Results\u2_console.txt" 2>&1
+
+Do not use this incorrect form:
+
+    abaqus viewer noGUI="...\extract_u2_local_selected_steps.py" --output-dir "C:\Data\Results"
+
+It omits the standalone -- separator and sends --output-dir to Viewer rather
+than to the Python script.
+
+
+5.7 extract_cpress_copen_pipe_selected_steps.py
+------------------------------------------------
+
+What it does
+
+Extracts CPRESS and COPEN at nodes on PIPE-only paths. At each selected path
+node it reports maximum CPRESS, minimum COPEN, and sample counts. Missing data
+remain blank. Values with absolute magnitude at or above the default 1.0E30
+undefined-value limit are discarded, avoiding Abaqus placeholders near 1E38.
+The workbook contains editable CPRESS and COPEN path plots.
+
+If no element set/range is supplied, all PIPE elements are processed. When an
+explicit set or range is supplied, the script trusts the user's element type
+for speed; ensure the selection contains the intended pipeline elements.
+
+Default instance: PART-1-1
+Default start node set: START; automatic endpoint fallback if missing
+Default outputs for model.odb:
+    model_PIPE_ONLY_CPRESS_COPEN.rpt
+    model_PIPE_ONLY_CPRESS_COPEN_along_path.xlsx
+Diagnostic log: extract_cpress_copen_pipe_selected_steps.log
+Launcher: abaqus python
+Dependency: extract_le11_the11_selected_steps_pipe_only.py in the same folder
+
+Complete option syntax
+
+    extract_cpress_copen_pipe_selected_steps.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--element-set SET] ...
+        [--element-range FIRST LAST] ...
+        [--start-node LABEL]
+        [--start-node-set SET]
+        [--frame-index INDEX]
+        [--undefined-value-limit VALUE]
+        [--list-steps]
+        [--list-element-sets]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+This script has no --element exact-label option. Use --element-range N N to
+select one element number.
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --help
+
+All ODBs, all steps, all PIPE elements
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+One ODB
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results"
+
+List steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+List only element sets containing PIPE elements
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-element-sets
+
+Element sets, ranges, or their union
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-set "CONTACT_ZONE"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-range 1001 1200 --element-range 2001 2200
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-set "CONTACT_ZONE" --element-range 3001 3200
+
+One element number
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --element-range 1001 1001
+
+Step selections
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --steps "Step-2" "Step-5"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-range "Preload" "Operation"
+
+Path start, selected frame, and another undefined-value threshold
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --start-node-set "PIPE_START_NODE" --frame-index 1 --undefined-value-limit 1.0E35
+
+Console capture; a diagnostic log is also created in --output-dir
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_cpress_copen_pipe_selected_steps.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" > "C:\Data\Results\contact_console.txt" 2>&1
+
+
+5.8 extract_esf1_water_depth_pipe31h_path.py
+------------------------------------------------
+
+What it does
+
+Builds a start-to-end route through PIPE31H elements only. It outputs one row
+per selected pipe element containing Element Midpoint Distance, Element Label,
+Element Node Labels, final as-laid Midpoint Water Depth Z, and one ESF1 value
+for each selected step or all steps by default. Finite ELEMENT_NODAL ESF1
+contributions are averaged only within the same element; adjacent elements are
+never averaged together at a shared node. Each ESF1 value is plotted at that
+element's midpoint distance. Water depth comes from COORD3 at the final frame
+of --aslaid-step, with original Z + U3 as a fallback when COORD is unavailable.
+Two-node midpoint depth is the mean of its end-node depths; a complete
+three-node element uses its actual midside-node depth. The Excel workbook
+contains a combined ESF1/water-depth chart and a separate water-depth chart.
+
+Every extraction run requires --aslaid-step, supplied as an exact name or
+1-based ODB step position. Listing commands do not require it. --frame-index
+controls ESF1 only; water depth always uses the final as-laid frame.
+
+Default instance: PART-1-1
+Default element selection: all PIPE31H elements on the resolved route
+Default outputs for model.odb:
+    model_PIPE31H_ESF1_WATER_DEPTH_PATH.rpt
+    model_PIPE31H_ESF1_WATER_DEPTH_PATH.xlsx
+Diagnostic log: extract_esf1_water_depth_pipe31h_path.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_esf1_water_depth_pipe31h_path.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--element-set SET] ...
+        [--element LABEL [LABEL ...]] ...
+        [--element-range FIRST LAST] ...
+        [--start-node LABEL]
+        [--end-node LABEL]
+        [--start-node-set SET]
+        [--end-node-set SET]
+        --aslaid-step STEP_OR_1_BASED_POSITION
+        [--frame-index INDEX]
+        [--list-steps]
+        [--list-element-sets]
+        [--list-endpoint-sets]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --help
+
+List steps, PIPE31H sets, or endpoint sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-element-sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-endpoint-sets
+
+All ODBs and all ESF1 steps; named as-laid step
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results" --aslaid-step "Final As-Laid"
+
+One ODB; as-laid step by 1-based position
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --aslaid-step 7
+
+Selected ESF1 steps or ranges
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "Final As-Laid" --steps "Step-2" "Step-5"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "Final As-Laid" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "Final As-Laid" --step-range "Preload" "Operation"
+
+Exact endpoints or endpoint sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "Final As-Laid" --start-node 1 --end-node 5001
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "Final As-Laid" --start-node-set "PIPE_START_NODE" --end-node-set "PIPE_END_NODE"
+
+Select sets, exact labels, ranges, and one ESF1 frame
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "Final As-Laid" --element-set "SET_A" --element 1500 --element-range 2001 2200 --frame-index 1
+
+Custom report and console capture
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_esf1_water_depth_pipe31h_path.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --output-name "custom_esf1_depth.rpt" --aslaid-step "Final As-Laid" > "C:\Data\Results\esf1_depth_console.txt" 2>&1
+
+
+5.9 extract_lccdcc_pipe_input.py
+---------------------------------
+
+What it does
+
+Creates one tab-delimited LCCDCC input .txt file for every selected step. The
+columns are KP, KP, WD, ESF1, Axial Strain (SE1), THE (THE11), SK2, SK1, BMY
+(SM2), and BM-Z (SM1). Only PIPE* elements are used. Each result column is the
+signed value with the largest absolute magnitude over its section-point and
+element-nodal contributions at the path node.
+
+WD is strictly COORD3 from the final frame of the required --aslaid-step. This
+script deliberately does not use a U3 fallback. --frame-index controls the
+result steps only, not WD.
+
+Default instance: PART-1-1
+Default element selection: all PIPE* elements on the route
+Default output pattern:
+    model_Step004_As-Laid_LCCDCC_INPUT.txt
+Diagnostic log: extract_lccdcc_pipe_input.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_lccdcc_pipe_input.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--instance INSTANCE]
+        [--pipe-element-set SET] ...
+        [--pipe-element LABEL [LABEL ...]] ...
+        [--pipe-element-range FIRST LAST] ...
+        [--start-node LABEL]
+        [--end-node LABEL]
+        [--start-node-set SET]
+        [--end-node-set SET]
+        --aslaid-step STEP_OR_1_BASED_POSITION
+        [--frame-index INDEX]
+        [--precision 1_TO_12]
+        [--list-steps]
+        [--list-pipe-element-sets]
+        [--list-endpoint-sets]
+        [--verbose]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+There is no --output-name option because the script creates one output file
+for each selected step.
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --help
+
+List steps, PIPE sets, or endpoint sets; --aslaid-step is not required for
+listing
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-pipe-element-sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-endpoint-sets
+
+All ODBs and all result steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results" --aslaid-step "As-Laid"
+
+One ODB; as-laid step by position
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --aslaid-step 4
+
+Selected steps, numeric range, named range, or one numbered result step
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "As-Laid" --steps "As-Laid" "Operation"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "As-Laid" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "As-Laid" --step-range "Preload" "Operation"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step 4 --step-range 7 7
+
+Element selector union
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --aslaid-step "As-Laid" --pipe-element-set "PIPE_SET_A" --pipe-element 1500 --pipe-element-range 2001 2200
+
+Explicit endpoints, result frame, precision, and verbose progress
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --aslaid-step "As-Laid" --start-node-set "PIPE_START_NODE" --end-node-set "PIPE_END_NODE" --frame-index 2 --precision 2 --verbose
+
+Quiet console capture; details also go to the diagnostic log
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_lccdcc_pipe_input.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --aslaid-step "As-Laid" > "C:\Data\Results\lccdcc_console.txt" 2>&1
+
+
+5.10 extract_pipe_connector_spring_history.py
+------------------------------------------------
+
+What it does
+
+Extracts every frame of selected steps for:
+
+* ESF1 from selected PIPE* elements;
+* CTF1 from selected CONN* elements;
+* S11 and E11 from selected SPRING* elements; and
+* signed CTF1 + S11 for every selected connector/spring pair sharing exactly
+  one node.
+
+It writes a tab-delimited report and an Excel workbook with five native charts.
+At least one pipe, connector, or spring element selector is required for an
+extraction. A family with no selector is omitted and its chart remains empty.
+Normal extraction is quiet unless --verbose is used.
+
+Default instance: PART-1-1
+Default outputs for model.odb:
+    model_PIPE_CONNECTOR_SPRING_HISTORY.rpt
+    model_PIPE_CONNECTOR_SPRING_HISTORY.xlsx
+Diagnostic log: extract_pipe_connector_spring_history.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_pipe_connector_spring_history.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--output-name NAME]
+        [--instance INSTANCE]
+        [--pipe-element-set SET] ...
+        [--pipe-element LABEL [LABEL ...]] ...
+        [--pipe-element-range FIRST LAST] ...
+        [--connector-element-set SET] ...
+        [--connector-element LABEL [LABEL ...]] ...
+        [--connector-element-range FIRST LAST] ...
+        [--spring-element-set SET] ...
+        [--spring-element LABEL [LABEL ...]] ...
+        [--spring-element-range FIRST LAST] ...
+        [--list-steps]
+        [--list-element-sets]
+        [--verbose]
+        [--steps STEP [STEP ...] | --step-range START END]
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --help
+
+List steps or supported element-set counts
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-element-sets
+
+Select all three element families by set
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --pipe-element-set "PIPE_SET" --connector-element-set "CONNECTOR_SET" --spring-element-set "SPRING_SET"
+
+Select exact element numbers
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --pipe-element 1001 1002 --connector-element 5001 5002 --spring-element 7001 7002
+
+Select inclusive ranges
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --pipe-element-range 1001 1200 --connector-element-range 5001 5100 --spring-element-range 7001 7100
+
+Mix sets, labels, and ranges
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --pipe-element-set "PIPE_SET" --connector-element 5001 --spring-element-range 7001 7100
+
+Selected steps or ranges; every frame of the selected steps is still read
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --pipe-element-set "PIPE_SET" --steps "Step-2" "Operation"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --pipe-element-set "PIPE_SET" --step-range 3 7
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --pipe-element-set "PIPE_SET" --step-range "Preload" "Operation"
+
+Verbose mode and custom output name
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --output-name "custom_history.rpt" --pipe-element-set "PIPE_SET" --connector-element-set "CONNECTOR_SET" --spring-element-set "SPRING_SET" --verbose
+
+The corresponding workbook is custom_history.xlsx.
+
+Quiet console capture
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_connector_spring_history.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --pipe-element-set "PIPE_SET" --connector-element-set "CONNECTOR_SET" --spring-element-set "SPRING_SET" > "C:\Data\Results\history_console.txt" 2>&1
+
+If an element-set name is wrong, the complete available-set list is written
+to the diagnostic log, not printed during normal/verbose extraction. Explicit
+--list-element-sets intentionally prints the requested inventory.
+
+
+5.11 extract_pipe_s11_delta_step_pairs.py
+------------------------------------------
+
+What it does
+
+Original, complete-section-point S11 delta script. It reads every frame and
+every available pipe section point for each requested step pair. At matching
+element/node/section-point locations:
+
+    MAX Delta S11 = max(all frames of first step)
+                    - max(all frames of second step)
+
+    MIN Delta S11 = min(all frames of first step)
+                    - min(all frames of second step)
+
+Frames are not paired and frame counts may differ. Final path-node envelopes
+retain MAX and MIN separately at -90, 0, 90, and 180 degrees for the inner,
+middle, and outer radii. Positive and negative radius points are not combined.
+
+It always writes one wide final .rpt and three editable Excel workbooks. Raw
+frame-by-frame intermediate S11 is written only with --write-intermediate.
+Use --verbose for immediate frame-completion progress.
+
+Default instance: PART-1-1
+Default element selection: all supported PIPE* elements on the route
+Default outputs for model.odb:
+    model_MAX_DELTA_S11_PATH.rpt
+    model_MAX_DELTA_S11_INNER_FIBER.xlsx
+    model_MAX_DELTA_S11_MIDDLE_FIBER.xlsx
+    model_MAX_DELTA_S11_OUTER_FIBER.xlsx
+Optional intermediate pattern:
+    model_Pair001_First_TO_Second_S11_INTERMEDIATE.rpt
+Diagnostic log: extract_pipe_s11_delta_step_pairs.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_pipe_s11_delta_step_pairs.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--instance INSTANCE]
+        --step-pair FIRST SECOND [--step-pair FIRST SECOND ...]
+        [--pipe-element-set SET] ...
+        [--pipe-element LABEL [LABEL ...]] ...
+        [--pipe-element-range FIRST LAST] ...
+        [--start-node LABEL]
+        [--end-node LABEL]
+        [--start-node-set SET]
+        [--end-node-set SET]
+        [--write-intermediate]
+        [--precision 1_TO_12]
+        [--list-steps]
+        [--list-pipe-element-sets]
+        [--list-endpoint-sets]
+        [--verbose]
+
+There is no --steps, --step-range, --frame-index, or --output-name option.
+For extraction, at least one --step-pair is required. Listing commands do not
+require a pair.
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --help
+
+List steps, PIPE sets, or endpoint sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-pipe-element-sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-endpoint-sets
+
+One named step pair
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair "AsLaid" "Operational"
+
+Several named pairs
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair "AsLaid" "Hydrotest" --step-pair "Hydrotest" "Operation"
+
+Pairs by 1-based positions, or mixed position/name
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 3 7 --step-pair 7 10
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 3 "Operation"
+
+Pipe element selection union
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 22 23 --pipe-element-set "PIPE_SET" --pipe-element 1500 --pipe-element-range 2001 2200
+
+Explicit endpoints
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 22 23 --start-node 1001 --end-node 2500
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 22 23 --start-node-set "PIPE_START_NODE" --end-node-set "PIPE_END_NODE"
+
+Frame-by-frame progress
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose
+
+Optional intermediate report and output precision
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --write-intermediate --precision 6 --verbose
+
+Console capture with promptly flushed frame progress
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose > "C:\Data\Results\delta_s11_console.txt" 2>&1
+
+The original script scans all section points before the four final angles are
+selected. For a model with many angles and frames, the optimized script in
+section 5.12 is usually the better production choice.
+
+
+5.12 extract_pipe_s11_delta_step_pairs_four_angles.py
+------------------------------------------------------
+
+What it does
+
+Separate optimized S11 delta variant. It uses the same MAX/MIN definitions,
+step-pair direction, independent frame envelopes, path logic, radius groups,
+final tables, and editable charts as the original. It filters section points
+to -90, 0, 90, and 180 degrees while each frame is scanned, reducing retained
+data for a 16-angle/3-radius section from 48 to 12 section points per
+element/node. It does not import, modify, or overwrite the original script.
+
+Default instance: PART-1-1
+Default element selection: all supported PIPE* elements on the route
+Default outputs for model.odb:
+    model_MAX_DELTA_S11_4ANGLES_PATH.rpt
+    model_MAX_DELTA_S11_4ANGLES_INNER_FIBER.xlsx
+    model_MAX_DELTA_S11_4ANGLES_MIDDLE_FIBER.xlsx
+    model_MAX_DELTA_S11_4ANGLES_OUTER_FIBER.xlsx
+Optional intermediate pattern:
+    model_Pair001_First_TO_Second_S11_4ANGLES_INTERMEDIATE.rpt
+Diagnostic log: extract_pipe_s11_delta_step_pairs_four_angles.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_pipe_s11_delta_step_pairs_four_angles.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--instance INSTANCE]
+        --step-pair FIRST SECOND [--step-pair FIRST SECOND ...]
+        [--pipe-element-set SET] ...
+        [--pipe-element LABEL [LABEL ...]] ...
+        [--pipe-element-range FIRST LAST] ...
+        [--start-node LABEL]
+        [--end-node LABEL]
+        [--start-node-set SET]
+        [--end-node-set SET]
+        [--write-intermediate]
+        [--precision 1_TO_12]
+        [--list-steps]
+        [--list-pipe-element-sets]
+        [--list-endpoint-sets]
+        [--verbose]
+
+There is no --steps, --step-range, --frame-index, or --output-name option.
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --help
+
+List steps, PIPE sets, or endpoint sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-pipe-element-sets
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --instance "PART-1-1" --list-endpoint-sets
+
+One or several step pairs
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair "AsLaid" "Operational"
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 3 7 --step-pair 7 10
+
+Pipe selectors and exact endpoints
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 22 23 --pipe-element-set "PIPE_SET" --pipe-element 1500 --pipe-element-range 2001 2200 --start-node-set "PIPE_START_NODE" --end-node-set "PIPE_END_NODE"
+
+Fast normal run with frame progress
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose
+
+Optional four-angle intermediate report
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --write-intermediate --precision 6 --verbose
+
+Console capture
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose > "C:\Data\Results\delta_s11_4angles_console.txt" 2>&1
+
+
+6. COMMAND INDEX BY FUNCTION
+============================
+
+Show help for any abaqus-python script
+
+    abaqus python "C:\python_aba\takeoutSFSM\SCRIPT_NAME.py" --help
+
+Show help for local U2
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --help
+
+Process one ODB
+
+    --input-dir "C:\Data\ODBs" --odb "model.odb"
+
+Process every ODB in one folder
+
+    --input-dir "C:\Data\ODBs"
+
+Write outputs elsewhere
+
+    --output-dir "C:\Data\Results"
+
+List step names/positions on scripts that support it
+
+    --list-steps
+
+Select exact step names
+
+    --steps "Step-2" "Step-5"
+
+Select an inclusive 1-based step range
+
+    --step-range 3 7
+
+Select one numbered step
+
+    --step-range 7 7
+
+Select S11 delta step pairs
+
+    --step-pair 3 7 --step-pair 7 10
+
+Select the first frame, a particular frame, or the last usable frame
+
+    --frame-index 0
+    --frame-index 2
+    --frame-index -1
+
+Select exact path endpoints
+
+    --start-node 1001 --end-node 2500
+
+Select endpoint node sets
+
+    --start-node-set "PIPE_START_NODE" --end-node-set "PIPE_END_NODE"
+
+List likely endpoint node sets where supported
+
+    --list-endpoint-sets
+
+Select elements
+
+    --element-set "SET_A"
+    --element 1001 1002
+    --element-range 1001 1200
+
+Select pipe elements
+
+    --pipe-element-set "PIPE_SET"
+    --pipe-element 1001 1002
+    --pipe-element-range 1001 1200
+
+Select connector elements
+
+    --connector-element-set "CONNECTOR_SET"
+    --connector-element 5001 5002
+    --connector-element-range 5001 5100
+
+Select spring elements
+
+    --spring-element-set "SPRING_SET"
+    --spring-element 7001 7002
+    --spring-element-range 7001 7100
+
+Request a final as-laid water-depth step
+
+    --aslaid-step "As-Laid"
+    --aslaid-step 4
+
+Show progress on scripts that support verbose mode
+
+    --verbose
+
+Write optional raw S11 intermediate data
+
+    --write-intermediate
+
+Capture console output
+
+    > "C:\Data\Results\console.txt" 2>&1
+
+Stop the foreground command
+
+    Ctrl+C
+
+Force-stop an exact PID from another Command Prompt only as a last resort
+
+    taskkill /PID 12345 /T /F
+
+
+7. TROUBLESHOOTING COMMAND-LINE PROBLEMS
+========================================
+
+Problem: Abaqus says -output-dir may not be used with Viewer.
+
+Cause: The standalone -- separator was omitted from the U2 Viewer command.
+
+Correct form:
+
+    abaqus viewer noGUI="C:\python_aba\takeoutSFSM\extract_u2_local_selected_steps.py" -- --input-dir "C:\Data\ODBs" --output-dir "C:\Data\Results"
+
+
+Problem: unrecognized arguments: --model.odb or --GdM_...odb
+
+Cause: The ODB filename was written as if it were an option.
+
+Correct form:
+
+    --odb "model.odb"
+
+
+Problem: ImportError for another extraction script.
+
+Check the dependency summary in section 2. Put the required helper .py in the
+same folder as the dependent script, and launch the dependent script by its
+full path.
+
+
+Problem: a numeric step input selects the wrong thing.
+
+Step positions are 1-based. Frame indexes are zero-based. Use --list-steps to
+confirm ODB order. For the delta scripts, use --step-pair; for the other
+selected-step scripts, use --steps or --step-range.
+
+
+Problem: an output workbook cannot be replaced.
+
+Close that workbook in Excel and rerun. Excel can lock an open .xlsx file.
+
+
+Problem: no progress appears during a long S11 delta run.
+
+Add --verbose. A line is printed and flushed after each completed frame. One
+large frame can still take time before its completion line appears.
+
+
+Problem: COPEN is near 1E38.
+
+Use the current CPRESS/COPEN script. It treats values at or above the default
+absolute limit of 1.0E30 as undefined. Change the limit only if legitimate
+model results could exceed it:
+
+    --undefined-value-limit 1.0E35
+
+
+Problem: the S11 run is too slow.
+
+Use extract_pipe_s11_delta_step_pairs_four_angles.py and omit
+--write-intermediate unless raw data are required. Limit the run to one ODB and
+the necessary pipe elements when appropriate.
+
+
+END OF MANUAL
+=============
