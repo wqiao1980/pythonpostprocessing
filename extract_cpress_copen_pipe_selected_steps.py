@@ -16,6 +16,8 @@ At a path node with multiple contact values, the script reports the maximum
 CPRESS and minimum COPEN. Missing contact output is left blank, not replaced
 with zero. Abaqus undefined placeholders with very large magnitude are also
 left blank. The Excel workbook contains native, user-editable scatter charts.
+Plot-only zero points connect separated selected PIPE-element regions along
+the Y=0 baseline. Chart series retain the exact selected step names.
 """
 
 import argparse
@@ -40,7 +42,7 @@ DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_FRAME_INDEX = -1
 DEFAULT_UNDEFINED_ABS_LIMIT = 1.0e30
 FIELD_NAMES = ("CPRESS", "COPEN")
-SCRIPT_VERSION = "2026-09-05-r6"
+SCRIPT_VERSION = "2026-09-12-r8"
 
 
 def parse_arguments():
@@ -417,7 +419,7 @@ def instance_elements_from_labels(instance, selected_labels):
 def resolve_pipe_element_selection(
     odb, instance, requested_sets, requested_ranges
 ):
-    """Return output labels/nodes; explicit selections are trusted as PIPE."""
+    """Return output labels, nodes, and edges for the selected elements."""
     selection_requested = bool(requested_sets or requested_ranges)
     selected_labels = set()
     notes = []
@@ -499,14 +501,40 @@ def resolve_pipe_element_selection(
         )
 
     selected_nodes = set()
+    selected_path_edges = set()
     for element in selected_elements.values():
-        selected_nodes.update(
+        connectivity = tuple(
             int(node_label) for node_label in element.connectivity
         )
+        selected_nodes.update(connectivity)
+        if len(connectivity) == 2:
+            physical_order = connectivity
+        elif len(connectivity) == 3:
+            # Abaqus quadratic PIPE elements list the two end nodes first
+            # and the midside node third.
+            physical_order = (
+                connectivity[0],
+                connectivity[2],
+                connectivity[1],
+            )
+        else:
+            physical_order = ()
+        for index in range(len(physical_order) - 1):
+            selected_path_edges.add(
+                tuple(
+                    sorted(
+                        (
+                            physical_order[index],
+                            physical_order[index + 1],
+                        )
+                    )
+                )
+            )
 
     return (
         selected_labels,
         selected_nodes,
+        selected_path_edges,
         element_selection_description(requested_sets, requested_ranges),
         notes,
         total_pipe_elements,
@@ -799,7 +827,7 @@ def contact_curves(path_information, extracted_frames, variable_name):
     return curves_by_path
 
 
-def xlsx_path_table(curves):
+def xlsx_path_table(curves, selected_path_edges):
     locations = set()
     curve_maps = []
     for step_name, points in curves:
@@ -809,10 +837,36 @@ def xlsx_path_table(curves):
             locations.add(location)
             values[location] = contact_value
         curve_maps.append((step_name, values))
-    return (
-        sorted(locations, key=lambda item: (item[0], item[1])),
-        curve_maps,
+    ordered_locations = sorted(
+        locations, key=lambda item: (item[0], item[1])
     )
+    plot_locations = []
+    zero_bridge_locations = set()
+    previous_location = None
+    for location in ordered_locations:
+        if previous_location is not None:
+            previous_node = previous_location[1]
+            current_node = location[1]
+            edge = tuple(sorted((previous_node, current_node)))
+            if edge not in selected_path_edges:
+                # Add plot-only zero points at both sides of an omitted
+                # element interval. Excel therefore descends to Y=0,
+                # follows the zero baseline across the X gap, and rises at
+                # the next selected region. A blank node label distinguishes
+                # these chart-control rows from extracted ODB node results.
+                previous_zero = (previous_location[0], None)
+                current_zero = (location[0], None)
+                plot_locations.extend((previous_zero, current_zero))
+                zero_bridge_locations.update(
+                    (previous_zero, current_zero)
+                )
+        plot_locations.append(location)
+        previous_location = location
+
+    for unused_step_name, values in curve_maps:
+        for zero_location in zero_bridge_locations:
+            values[zero_location] = 0.0
+    return plot_locations, curve_maps
 
 
 def contact_sheet_name(variable_name, path_id, used_names):
@@ -833,8 +887,13 @@ def contact_sheet_name(variable_name, path_id, used_names):
 
 def aggregation_text(variable_name):
     if variable_name == "CPRESS":
-        return "Maximum CPRESS at each PIPE-path node; missing output is blank"
-    return "Minimum COPEN at each PIPE-path node; missing output is blank"
+        result_text = "Maximum CPRESS at each PIPE-path node"
+    else:
+        result_text = "Minimum COPEN at each PIPE-path node"
+    return (
+        result_text
+        + "; missing output is blank; plot-only Y=0 rows bridge X gaps"
+    )
 
 
 def xlsx_worksheet_xml(
@@ -881,10 +940,14 @@ def xlsx_worksheet_xml(
 
     for row_number, location in enumerate(locations, 5):
         path_distance, node_label = location
-        cells = [
-            common.xlsx_number_cell(row_number, 1, path_distance, 4),
-            common.xlsx_number_cell(row_number, 2, node_label, 0),
-        ]
+        if path_distance is None:
+            rows.append('<row r="{0}"/>'.format(row_number))
+            continue
+        cells = [common.xlsx_number_cell(row_number, 1, path_distance, 4)]
+        if node_label is not None:
+            cells.append(
+                common.xlsx_number_cell(row_number, 2, node_label, 0)
+            )
         for column_number, (unused_step, values) in enumerate(
             curve_maps, 3
         ):
@@ -988,7 +1051,7 @@ def xlsx_chart_xml(
       {4}
       {5}
     </c:plotArea>
-    <c:legend><c:legendPos val="r"/><c:layout/><c:overlay val="0"/></c:legend>
+    <c:legend><c:legendPos val="t"/><c:layout/><c:overlay val="0"/></c:legend>
     <c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/><c:showDLblsOverMax val="0"/>
   </c:chart>
   <c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings>
@@ -1016,7 +1079,11 @@ def xlsx_chart_xml(
 
 
 def write_contact_excel(
-    excel_path, odb_name, path_information, extracted_frames
+    excel_path,
+    odb_name,
+    path_information,
+    selected_path_edges,
+    extracted_frames,
 ):
     used_names = set()
     sheet_data = []
@@ -1026,7 +1093,7 @@ def write_contact_excel(
         )
         for path_id in sorted(curves_by_path):
             locations, curve_maps = xlsx_path_table(
-                curves_by_path[path_id]
+                curves_by_path[path_id], selected_path_edges
             )
             sheet_data.append(
                 (
@@ -1189,6 +1256,7 @@ def write_report(
         (
             pipe_element_labels,
             selected_nodes,
+            selected_path_edges,
             element_selection,
             element_selection_notes,
             total_pipe_elements,
@@ -1325,6 +1393,10 @@ def write_report(
                 "Missing contact output: blank (not assumed to be zero)\n"
             )
             report_file.write(
+                "Excel chart X gaps: plot-only Y=0 points bridge selected "
+                "PIPE regions; their node-label cells are blank\n"
+            )
+            report_file.write(
                 "Contact filtering: PIPE-path node membership; contact "
                 "element labels are not compared with PIPE labels\n"
             )
@@ -1412,7 +1484,11 @@ def write_report(
 
         odb_stem = os.path.splitext(os.path.basename(odb_path))[0]
         write_contact_excel(
-            excel_path, odb_stem, path_information, extracted_frames
+            excel_path,
+            odb_stem,
+            path_information,
+            selected_path_edges,
+            extracted_frames,
         )
 
         print("Selected steps:")

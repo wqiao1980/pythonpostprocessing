@@ -123,9 +123,26 @@ disconnected PIPE path. Each worksheet contains path distance, node label,
 and one column for every selected step. Each worksheet also contains a native
 Excel scatter chart.
 
-The charts are editable in Excel. Users can change chart type, colors, line
-styles, markers, titles, axes, legend, size, and layout. Excel does not need
-to be installed or open when Abaqus creates the workbook.
+The charts use the same line-and-marker layout as Cpressformat.png, with the
+legend above the plot. Every series name is the exact selected Abaqus step
+name. CPRESS, COPEN, units, and other text are not appended to the legend
+series name.
+
+When an element set or element-number range creates separated regions along
+X/path distance, version 2026-09-12-r8 adds two plot-only Y=0 points: one at
+the end of the preceding selected region and one at the beginning of the
+next selected region. The plotted line descends to zero, follows the Y=0
+baseline across the X gap, and rises into the next selected region.
+
+These plot-only zero rows have a path distance and zero in every step column,
+but their Node Label cell is blank. They are chart controls, not extracted
+ODB node results. They do not change the actual CPRESS/COPEN values or the
+text report. A genuinely missing CPRESS or COPEN result at a selected PIPE
+node remains blank; it is not changed to zero.
+
+The charts are native and editable in Excel. Users can change chart type,
+colors, line styles, markers, titles, axes, legend, size, and layout. Excel
+does not need to be installed or open when Abaqus creates the workbook.
 
 
 Process all ODBs and all steps
@@ -358,7 +375,7 @@ The > operator overwrites contact_console.txt. Use >> to append instead.
 Example console output
 ----------------------
 
-extract_cpress_copen_pipe_selected_steps.py version 2026-09-05-r6
+extract_cpress_copen_pipe_selected_steps.py version 2026-09-12-r8
 Opening: C:\Data\Results\model.odb
 Selected steps:
   Step-2 (frame index 10)
@@ -421,3 +438,11 @@ Troubleshooting
    PIPE mesh element label. Rerun the extraction to replace workbooks created
    by an older script. If legitimate model results can exceed the default
    limit, set a higher value with --undefined-value-limit.
+
+9. How an unselected X/path-distance interval is plotted
+
+   Version 2026-09-12-r8 reads the selected PIPE-element connectivity and
+   inserts plot-only Y=0 points at both sides of every omitted interval. The
+   line is connected across the interval along the zero baseline. A blank
+   Node Label identifies each plot-only row. The series legend continues to
+   show only the exact Abaqus step name.
