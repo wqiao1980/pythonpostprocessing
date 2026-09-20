@@ -1,16 +1,16 @@
 from __future__ import print_function
 
-"""Calculate four-angle pipe S11 envelopes for ODB step pairs.
+"""Calculate four-angle heat-up to cool-down pipe S11 changes.
 
 The script is self-contained and runs with ``abaqus python``. S11 is retained
-at four target angles in every frame of each requested step. Each step is
-enveloped independently; frames are not paired. Intermediate values are
-processed in memory unless ``--write-intermediate`` is supplied. The final
-Only section points at -90, 0, 90, and 180 degrees are retained while each
-frame is scanned. The report contains both maximum-envelope and
-minimum-envelope signed delta S11 profiles along the pipeline path. The final
-data is split into inner-, middle-, and outer-fiber workbooks with native
-editable Excel charts.
+at four target angles. The first step in each pair is the heat-up step and is
+enveloped over all frames. The second step is the cool-down step and only its
+last frame is used in the delta calculation. Intermediate values are processed
+in memory unless ``--write-intermediate`` is supplied. Only section points at
+-90, 0, 90, and 180 degrees are retained while each required frame is scanned.
+The report contains both maximum- and minimum-heat-up-envelope signed delta
+S11 profiles along the pipeline path. The final data is split into inner-,
+middle-, and outer-fiber workbooks with native editable Excel charts.
 """
 
 import argparse
@@ -29,7 +29,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-07-four-angles-r1"
+SCRIPT_VERSION = "2026-09-20-four-angles-r2"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -48,9 +48,9 @@ def emit_progress(message):
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description=(
-            "Calculate maximum- and minimum-envelope signed delta S11 at "
-            "-90, 0, 90, and 180 degrees along a pipe path for one or more "
-            "user-defined ODB step pairs."
+            "Calculate signed delta S11 at -90, 0, 90, and 180 degrees. "
+            "For each pair, the first step is heat-up (all frames) and the "
+            "second step is cool-down (last frame only)."
         )
     )
     parser.add_argument(
@@ -82,9 +82,10 @@ def parse_arguments():
         action="append",
         nargs=2,
         default=[],
-        metavar=("FIRST", "SECOND"),
+        metavar=("HEATUP", "COOLDOWN"),
         help=(
-            "Step pair for delta S11. Each reference may be an exact step "
+            "Step pair for delta S11: enter the heat-up step first and the "
+            "cool-down step second. Each reference may be an exact step "
             "name or 1-based position. May be repeated."
         ),
     )
@@ -210,7 +211,10 @@ def parse_arguments():
         or args.list_endpoint_sets
     )
     if not listing and not args.step_pair:
-        parser.error("at least one --step-pair FIRST SECOND is required")
+        parser.error(
+            "at least one --step-pair HEATUP_STEP COOLDOWN_STEP is required; "
+            "enter the heat-up step first and the cool-down step second"
+        )
     return args
 
 
@@ -1387,6 +1391,7 @@ def write_intermediate_report(
     first_step_number,
     second_name,
     second_step_number,
+    cooldown_last_frame_index,
 ):
     columns = intermediate_section_columns(catalog)
     column_by_id = dict(
@@ -1400,19 +1405,29 @@ def write_intermediate_report(
         report.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
         report.write("Instance: {0}\n".format(instance_name))
         report.write(
-            "First step: {0} = {1}\n".format(
+            "First step (HEAT-UP; all frames used for maximum/minimum): "
+            "{0} = {1}\n".format(
                 first_step_number, first_name
             )
         )
         report.write(
-            "Second step: {0} = {1}\n".format(
+            "Second step (COOL-DOWN; only the last frame is used in Delta "
+            "S11): {0} = {1}\n".format(
                 second_step_number, second_name
+            )
+        )
+        report.write(
+            "Cool-down frame used in Delta S11: zero-based frame {0}.\n".format(
+                cooldown_last_frame_index
             )
         )
         report.write("Step Number is the 1-based ODB step position.\n")
         report.write("Frame Number is the zero-based Abaqus frame index.\n")
         report.write(
-            "Each row is one start-to-end path element for one step/frame. "
+            "This intermediate table lists all frames from both selected "
+            "steps. Only the cool-down step's last frame affects the final "
+            "Delta S11 calculation. Each row is one start-to-end path "
+            "element for one step/frame. "
             "Pipe Distance is the midpoint station of that element, and "
             "Node Number(s) lists its path nodes. Each section-point S11 "
             "is averaged only across element-nodal values belonging to "
@@ -1473,6 +1488,8 @@ def scan_step_s11_envelope(
     precision,
     progress_callback=None,
     progress_prefix=None,
+    frame_indices=None,
+    envelope_frame_indices=None,
 ):
     maximum_by_location = {}
     minimum_by_location = {}
@@ -1481,8 +1498,23 @@ def scan_step_s11_envelope(
     section_labels = {}
     source_names = set()
     sample_count = 0
+    envelope_sample_count = 0
     frame_count = len(frames)
-    for frame_index, frame in enumerate(frames):
+    if frame_indices is None:
+        frame_indices = list(range(frame_count))
+    if len(frame_indices) != frame_count:
+        raise ValueError("Frame-index list does not match the frame list.")
+    envelope_index_set = (
+        None
+        if envelope_frame_indices is None
+        else set(envelope_frame_indices)
+    )
+    for scan_index, frame in enumerate(frames):
+        frame_index = frame_indices[scan_index]
+        include_in_envelope = (
+            envelope_index_set is None
+            or frame_index in envelope_index_set
+        )
         frame_sample_start = sample_count
         values, frame_sections, source = extract_s11_locations(
             frame,
@@ -1500,25 +1532,27 @@ def scan_step_s11_envelope(
             value = values[location]
             sample_count += 1
             section_label = frame_sections.get(location, "")
-            section_labels[location] = section_label
-            previous = maximum_by_location.get(location)
-            if previous is None or value > previous:
-                maximum_by_location[location] = value
-                control_by_location[location] = {
-                    "frame": frame_index,
-                    "time": frame_time(frame),
-                    "value": value,
-                    "section": section_label,
-                }
-            previous_minimum = minimum_by_location.get(location)
-            if previous_minimum is None or value < previous_minimum:
-                minimum_by_location[location] = value
-                minimum_control_by_location[location] = {
-                    "frame": frame_index,
-                    "time": frame_time(frame),
-                    "value": value,
-                    "section": section_label,
-                }
+            if include_in_envelope:
+                envelope_sample_count += 1
+                section_labels[location] = section_label
+                previous = maximum_by_location.get(location)
+                if previous is None or value > previous:
+                    maximum_by_location[location] = value
+                    control_by_location[location] = {
+                        "frame": frame_index,
+                        "time": frame_time(frame),
+                        "value": value,
+                        "section": section_label,
+                    }
+                previous_minimum = minimum_by_location.get(location)
+                if previous_minimum is None or value < previous_minimum:
+                    minimum_by_location[location] = value
+                    minimum_control_by_location[location] = {
+                        "frame": frame_index,
+                        "time": frame_time(frame),
+                        "value": value,
+                        "section": section_label,
+                    }
             if intermediate_spool is not None:
                 section_id = add_intermediate_section(
                     intermediate_catalog, location[2], section_label
@@ -1560,12 +1594,13 @@ def scan_step_s11_envelope(
                 intermediate_spool.write("\t".join(row) + "\n")
         if progress_callback is not None:
             progress_callback(
-                "{0}: frame {1}/{2} complete ({3:.1f}%); "
-                "finite samples={4}, cumulative={5}".format(
+                "{0}: scan {1}/{2} complete ({3:.1f}%); ODB frame={4}; "
+                "finite samples={5}, cumulative scanned={6}".format(
                     progress_prefix or "S11 scan",
-                    frame_index + 1,
+                    scan_index + 1,
                     frame_count,
-                    100.0 * float(frame_index + 1) / float(frame_count),
+                    100.0 * float(scan_index + 1) / float(frame_count),
+                    frame_index,
                     sample_count - frame_sample_start,
                     sample_count,
                 )
@@ -1577,7 +1612,9 @@ def scan_step_s11_envelope(
         "minimum_control": minimum_control_by_location,
         "sections": section_labels,
         "sources": source_names,
-        "samples": sample_count,
+        "samples": envelope_sample_count,
+        "scanned_samples": sample_count,
+        "scanned_frames": frame_count,
     }
 
 
@@ -1609,6 +1646,14 @@ def calculate_pair_profile(
             "Step pair '{0}' -> '{1}' cannot be compared because one or "
             "both steps contain no frames.".format(first_name, second_name)
         )
+    cooldown_last_frame_index = len(second_frames) - 1
+    cooldown_last_frame = second_frames[cooldown_last_frame_index]
+    if write_intermediate:
+        cooldown_frames_to_scan = second_frames
+        cooldown_frame_indices = None
+    else:
+        cooldown_frames_to_scan = [cooldown_last_frame]
+        cooldown_frame_indices = [cooldown_last_frame_index]
     maximum_by_node = {}
     minimum_by_node = {}
     control_by_node = {}
@@ -1627,7 +1672,7 @@ def calculate_pair_profile(
     try:
         if progress_callback is not None:
             progress_callback(
-                "Pair {0}/{1} started: '{2}' - '{3}'".format(
+                "Pair {0}/{1} started: heat-up '{2}' - cool-down '{3}'".format(
                     pair_index, pair_count, first_name, second_name
                 )
             )
@@ -1658,13 +1703,13 @@ def calculate_pair_profile(
             intermediate_catalog,
             precision,
             progress_callback,
-            "Pair {0}/{1}, first step '{2}'".format(
+            "Pair {0}/{1}, heat-up step '{2}' (all frames)".format(
                 pair_index, pair_count, first_name
             ),
         )
         second_envelope = scan_step_s11_envelope(
             second_step_number,
-            second_frames,
+            cooldown_frames_to_scan,
             instance,
             output_nodes,
             output_element_labels,
@@ -1675,14 +1720,15 @@ def calculate_pair_profile(
             intermediate_catalog,
             precision,
             progress_callback,
-            "Pair {0}/{1}, second step '{2}'".format(
+            "Pair {0}/{1}, cool-down step '{2}' (last frame used)".format(
                 pair_index, pair_count, second_name
             ),
+            frame_indices=cooldown_frame_indices,
+            envelope_frame_indices=(cooldown_last_frame_index,),
         )
         first_values = first_envelope["maximum"]
         second_values = second_envelope["maximum"]
         first_minimum_values = first_envelope["minimum"]
-        second_minimum_values = second_envelope["minimum"]
         first_locations = set(first_values.keys())
         second_locations = set(second_values.keys())
         common_locations = first_locations.intersection(second_locations)
@@ -1692,8 +1738,7 @@ def calculate_pair_profile(
             delta = first_value - second_value
             delta_by_location[location] = delta
             first_minimum_value = first_minimum_values[location]
-            second_minimum_value = second_minimum_values[location]
-            minimum_delta = first_minimum_value - second_minimum_value
+            minimum_delta = first_minimum_value - second_value
             minimum_delta_by_location[location] = minimum_delta
             node_label = location[0]
             matched_section_labels[location[2]] = second_envelope[
@@ -1727,9 +1772,7 @@ def calculate_pair_profile(
                 first_minimum_control = first_envelope["minimum_control"][
                     location
                 ]
-                second_minimum_control = second_envelope["minimum_control"][
-                    location
-                ]
+                second_minimum_control = second_envelope["control"][location]
                 minimum_control_by_node[node_label] = {
                     "first_frame": first_minimum_control["frame"],
                     "first_time": first_minimum_control["time"],
@@ -1741,12 +1784,13 @@ def calculate_pair_profile(
                         first_envelope["sections"].get(location, ""),
                     ),
                     "first": first_minimum_value,
-                    "second": second_minimum_value,
+                    "second": second_value,
                     "delta": minimum_delta,
                 }
         if progress_callback is not None:
             progress_callback(
-                "Pair {0}/{1}: envelope comparison complete; matched "
+                "Pair {0}/{1}: heat-up envelope minus cool-down last-frame "
+                "comparison complete; matched "
                 "locations={2}".format(
                     pair_index, pair_count, len(common_locations)
                 )
@@ -1764,6 +1808,7 @@ def calculate_pair_profile(
                 first_step_number,
                 second_name,
                 second_step_number,
+                cooldown_last_frame_index,
             )
     finally:
         if intermediate_spool is not None:
@@ -1779,6 +1824,8 @@ def calculate_pair_profile(
         "second": second_name,
         "first_frames": len(first_frames),
         "second_frames": len(second_frames),
+        "cooldown_last_frame": cooldown_last_frame_index,
+        "cooldown_last_time": frame_time(cooldown_last_frame),
         "maximum": maximum_by_node,
         "minimum": minimum_by_node,
         "control": control_by_node,
@@ -1790,6 +1837,8 @@ def calculate_pair_profile(
         "sources": sorted(source_names),
         "first_samples": first_envelope["samples"],
         "second_samples": second_envelope["samples"],
+        "first_scanned_samples": first_envelope["scanned_samples"],
+        "second_scanned_samples": second_envelope["scanned_samples"],
         "compared_locations": len(common_locations),
         "missing_first": len(second_locations - first_locations),
         "missing_second": len(first_locations - second_locations),
@@ -2174,9 +2223,9 @@ def write_fiber_excel_workbooks(
             fiber_name.title()
         )
         note = (
-            "ODB: {0}. MAX = max(all first-step frames) - max(all "
-            "second-step frames); MIN = min(all first-step frames) - "
-            "min(all second-step frames). Frames are not paired."
+            "ODB: {0}. Enter HEAT-UP first and COOL-DOWN second. "
+            "MAX = max(all heat-up frames) - S11(cool-down last frame); "
+            "MIN = min(all heat-up frames) - S11(cool-down last frame)."
         ).format(odb_name)
         section_note = "Section points: {0}".format(
             "; ".join(
@@ -2271,13 +2320,14 @@ def write_final_report(
         )
         report.write(
             "At each matching element/node/section-point location: MAX "
-            "Delta S11 = max(S11 over all first-step frames) - max(S11 "
-            "over all second-step frames); MIN Delta S11 = min(S11 over "
-            "all first-step frames) - min(S11 over all second-step "
-            "frames).\n"
+            "Delta S11 = max(S11 over all HEAT-UP frames) - S11 at the "
+            "last COOL-DOWN frame; MIN Delta S11 = min(S11 over all "
+            "HEAT-UP frames) - S11 at the last COOL-DOWN frame.\n"
         )
         report.write(
-            "Frames are not paired. The two steps are enveloped independently. "
+            "Enter the HEAT-UP step first and the COOL-DOWN step second. "
+            "Frames are not paired. Only the heat-up step is enveloped; "
+            "the cool-down step contributes its last frame only. "
             "For each radius/angle, MAX is the greatest signed MAX delta "
             "and MIN is the smallest signed MIN delta across contributing "
             "pipe elements at each path node. Positive and negative radius "
@@ -2295,13 +2345,15 @@ def write_final_report(
                 )
         for index, profile in enumerate(profiles, 1):
             report.write(
-                "Pair {0}: '{1}' -> '{2}'; frames={3}/{4}; samples={5}/{6}; "
-                "matched locations={7}\n".format(
+                "Pair {0}: HEAT-UP '{1}' -> COOL-DOWN '{2}'; heat-up "
+                "frames={3}; cool-down frames={4}, last frame used={5}; "
+                "delta samples={6}/{7}; matched locations={8}\n".format(
                     index,
                     profile["first"],
                     profile["second"],
                     profile["first_frames"],
                     profile["second_frames"],
+                    profile["cooldown_last_frame"],
                     profile["first_samples"],
                     profile["second_samples"],
                     profile["compared_locations"],
@@ -2522,13 +2574,16 @@ def process_odb(odb_path, output_dir, args, progress_callback=None):
         messages.extend("Selection note: " + note for note in selection_notes)
         for index, profile in enumerate(profiles, 1):
             messages.append(
-                "Pair {0}: '{1}' -> '{2}'; frame counts={3}/{4}; "
-                "samples={5}/{6}; matched locations={7}; S11 sources={8}".format(
+                "Pair {0}: HEAT-UP '{1}' -> COOL-DOWN '{2}'; heat-up "
+                "frames={3}; cool-down frames={4}, last frame used={5}; "
+                "delta samples={6}/{7}; matched locations={8}; S11 "
+                "sources={9}".format(
                     index,
                     profile["first"],
                     profile["second"],
                     profile["first_frames"],
                     profile["second_frames"],
+                    profile["cooldown_last_frame"],
                     profile["first_samples"],
                     profile["second_samples"],
                     profile["compared_locations"],
@@ -2663,18 +2718,24 @@ def write_log(log_path, input_dir, output_dir, successes, failures):
         log_file.write("sys.argv: {0}\n".format(repr(sys.argv)))
         log_file.write("Input directory: {0}\n".format(input_dir))
         log_file.write("Output directory: {0}\n".format(output_dir))
-        log_file.write("Frame handling: each step enveloped independently\n")
+        log_file.write(
+            "Step-pair input order: HEAT-UP first, COOL-DOWN second\n"
+        )
+        log_file.write(
+            "Frame handling: all heat-up frames are enveloped; only the "
+            "last cool-down frame is used\n"
+        )
         log_file.write(
             "Section-angle filter per frame: -90, 0, 90, and 180 "
             "degrees only\n"
         )
         log_file.write(
-            "MAX delta at matching location: max S11 over first-step "
-            "frames - max S11 over second-step frames\n"
+            "MAX delta at matching location: max S11 over all heat-up "
+            "frames - S11 at the last cool-down frame\n"
         )
         log_file.write(
-            "MIN delta at matching location: min S11 over first-step "
-            "frames - min S11 over second-step frames\n"
+            "MIN delta at matching location: min S11 over all heat-up "
+            "frames - S11 at the last cool-down frame\n"
         )
         log_file.write(
             "Final envelopes by radius/angle: greatest signed MAX delta "

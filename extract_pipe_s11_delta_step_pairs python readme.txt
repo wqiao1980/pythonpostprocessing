@@ -1,5 +1,5 @@
-Abaqus Pipe S11 Delta Between Step Pairs - User Instructions
-=============================================================
+Abaqus Pipe S11 Heat-Up/Cool-Down Delta - User Instructions
+============================================================
 
 Purpose
 -------
@@ -8,12 +8,12 @@ extract_pipe_s11_delta_step_pairs.py is a self-contained Abaqus Python script.
 For every user-defined pair of steps, it:
 
 - reads S11 for pipe elements along the pipeline path;
-- reads every frame and every available section point;
-- finds both the maximum and minimum S11 over all frames independently in each
-  step at every element/node/section-point location;
-- calculates MAX Delta S11 = maximum S11 in the first step minus maximum S11
-  in the second step, and MIN Delta S11 = minimum S11 in the first step minus
-  minimum S11 in the second step, at each matching location;
+- treats the first step in every pair as HEAT-UP and reads all of its frames;
+- treats the second step as COOL-DOWN and uses only its last frame in the
+  final Delta S11 calculation;
+- calculates MAX Delta S11 = maximum S11 over all heat-up frames minus S11 at
+  the last cool-down frame, and MIN Delta S11 = minimum S11 over all heat-up
+  frames minus S11 at the same last cool-down frame;
 - retains the greatest signed MAX Delta S11 and the smallest signed MIN Delta
   S11 separately at -90, 0, 90, and 180 degrees for the inner, middle, and
   outer radii at each path node;
@@ -25,10 +25,10 @@ For every user-defined pair of steps, it:
   for every requested step pair.
 
 Raw frame-by-frame S11 values are not written unless --write-intermediate is
-entered. The per-location step envelopes used for Delta S11 are always handled
-in memory and are not included in the intermediate report. The three final
-Excel workbooks are always created; intermediate values remain in .rpt format
-only when requested.
+entered. The heat-up maximum/minimum envelopes and the selected cool-down last
+frame are handled in memory and are not included as separate summary blocks in
+the intermediate report. The three final Excel workbooks are always created;
+intermediate values remain in .rpt format only when requested.
 
 Abaqus/CAE or Viewer does not need to be opened. Run the script with
 "abaqus python" from an Abaqus Command Prompt.
@@ -37,32 +37,33 @@ Abaqus/CAE or Viewer does not need to be opened. Run the script with
 Important calculation definitions
 ---------------------------------
 
-Step-pair order matters. At each matching element/node/section-point location:
+Step-pair order matters. Always enter HEAT-UP first and COOL-DOWN second. At
+each matching element/node/section-point location:
 
-MAX Delta S11 = maximum S11 over all first-step frames
-                  - maximum S11 over all second-step frames
+MAX Delta S11 = maximum S11 over all HEAT-UP frames
+                  - S11 at the last COOL-DOWN frame
 
-MIN Delta S11 = minimum S11 over all first-step frames
-                  - minimum S11 over all second-step frames
+MIN Delta S11 = minimum S11 over all HEAT-UP frames
+                  - S11 at the last COOL-DOWN frame
 
 For example:
 
---step-pair "AsLaid" "Operational"
+--step-pair "HeatUp" "CoolDown"
 
 means:
 
-MAX Delta S11 = max-frame S11(AsLaid) - max-frame S11(Operational)
-MIN Delta S11 = min-frame S11(AsLaid) - min-frame S11(Operational)
+MAX Delta S11 = max(S11 over every HeatUp frame) - S11(last CoolDown frame)
+MIN Delta S11 = min(S11 over every HeatUp frame) - S11(last CoolDown frame)
 
-Frames are not paired. Each step is scanned and enveloped independently. The
-two steps may have different frame counts, frame times, and time increments.
+Frames are not paired. The heat-up step is enveloped over all frames. The
+cool-down step may have any number of frames, but only its last frame is used.
 
 For example, at one matching section point:
 
-- first-step S11 across its frames: 10, 25, 20; maximum = 25 and minimum = 10;
-- second-step S11 across its frames: 5, 30; maximum = 30 and minimum = 5;
+- heat-up S11 across its frames: 10, 25, 20; maximum = 25 and minimum = 10;
+- cool-down S11 across its frames: 5, 30; last-frame S11 = 30;
 - MAX Delta S11 = 25 - 30 = -5; and
-- MIN Delta S11 = 10 - 5 = 5.
+- MIN Delta S11 = 10 - 30 = -20.
 
 At one path node, the script reports twenty-four values for each step pair.
 For every radius/angle section point, it reports the greatest signed MAX Delta
@@ -84,26 +85,27 @@ Quick examples
 
 Process all ODB files in the current folder using step names:
 
-abaqus python extract_pipe_s11_delta_step_pairs.py --step-pair "AsLaid" "Operational"
+abaqus python extract_pipe_s11_delta_step_pairs.py --step-pair "HeatUp" "CoolDown"
 
 Process all ODBs in another folder and write results elsewhere:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" --step-pair "AsLaid" "Operational"
+abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\BPTiberFL6" --output-dir "C:\Data\BPTiberFL6\02_Results" --step-pair "HeatUp" "CoolDown"
 
 Process one ODB only:
 
-abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\BPTiberFL6" --odb "model.odb" --output-dir "C:\Data\BPTiberFL6\02_Results" --step-pair "AsLaid" "Operational"
+abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\BPTiberFL6" --odb "model.odb" --output-dir "C:\Data\BPTiberFL6\02_Results" --step-pair "HeatUp" "CoolDown"
 
 
 Select step pairs
 -----------------
 
-At least one --step-pair FIRST SECOND is required. Repeat the option to request
-more than one pair.
+At least one --step-pair HEATUP_STEP COOLDOWN_STEP is required. The first
+entry must be the heat-up step and the second entry must be the cool-down step.
+Repeat the option to request more than one heat-up/cool-down pair.
 
 Use exact step names:
 
-abaqus python extract_pipe_s11_delta_step_pairs.py --step-pair "AsLaid" "Hydrotest" --step-pair "Hydrotest" "Operation"
+abaqus python extract_pipe_s11_delta_step_pairs.py --step-pair "HeatUp-1" "CoolDown-1" --step-pair "HeatUp-2" "CoolDown-2"
 
 Use 1-based step positions instead of whole names:
 
@@ -201,30 +203,30 @@ It contains path and section-point mapping metadata followed by a wide table.
 For one step pair, the column pattern is:
 
 Pipeline Distance
-DELTA_S11 MAX INNER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN INNER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX INNER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN INNER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX INNER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN INNER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX INNER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN INNER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX MIDDLE FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN MIDDLE FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX MIDDLE FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN MIDDLE FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX MIDDLE FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN MIDDLE FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX MIDDLE FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN MIDDLE FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX OUTER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN OUTER FIBER ANGLE -90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX OUTER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN OUTER FIBER ANGLE 0 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX OUTER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN OUTER FIBER ANGLE 90 DEG [AsLaid - Hydrotest]
-DELTA_S11 MAX OUTER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
-DELTA_S11 MIN OUTER FIBER ANGLE 180 DEG [AsLaid - Hydrotest]
+DELTA_S11 MAX INNER FIBER ANGLE -90 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN INNER FIBER ANGLE -90 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX INNER FIBER ANGLE 0 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN INNER FIBER ANGLE 0 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX INNER FIBER ANGLE 90 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN INNER FIBER ANGLE 90 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX INNER FIBER ANGLE 180 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN INNER FIBER ANGLE 180 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX MIDDLE FIBER ANGLE -90 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN MIDDLE FIBER ANGLE -90 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX MIDDLE FIBER ANGLE 0 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN MIDDLE FIBER ANGLE 0 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX MIDDLE FIBER ANGLE 90 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN MIDDLE FIBER ANGLE 90 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX MIDDLE FIBER ANGLE 180 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN MIDDLE FIBER ANGLE 180 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX OUTER FIBER ANGLE -90 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN OUTER FIBER ANGLE -90 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX OUTER FIBER ANGLE 0 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN OUTER FIBER ANGLE 0 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX OUTER FIBER ANGLE 90 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN OUTER FIBER ANGLE 90 DEG [HeatUp - CoolDown]
+DELTA_S11 MAX OUTER FIBER ANGLE 180 DEG [HeatUp - CoolDown]
+DELTA_S11 MIN OUTER FIBER ANGLE 180 DEG [HeatUp - CoolDown]
 
 These headings appear on one tab-delimited header row. They are shown one per
 line above only for readability.
@@ -287,11 +289,11 @@ To request all intermediate values, add:
 
 Example:
 
-abaqus python extract_pipe_s11_delta_step_pairs.py --step-pair "AsLaid" "Operational" --write-intermediate
+abaqus python extract_pipe_s11_delta_step_pairs.py --step-pair "HeatUp" "CoolDown" --write-intermediate
 
 For each ODB and each requested pair, this writes a file whose name looks like:
 
-model_Pair001_AsLaid_TO_Operational_S11_INTERMEDIATE.rpt
+model_Pair001_HeatUp_TO_CoolDown_S11_INTERMEDIATE.rpt
 
 The intermediate report contains one wide tab-delimited table. Its first five
 columns are always:
@@ -334,11 +336,11 @@ point value was not available for that element and frame.
 
 Rows are ordered as follows:
 
-1. first selected step, frame 0, element midpoint distance from START to END;
-2. first selected step, frame 1, element midpoint distance from START to END;
-3. remaining first-step frames in increasing frame order;
-4. second selected step, frame 0, pipe distance from START to END; and
-5. remaining second-step frames in increasing frame order.
+1. heat-up step, frame 0, element midpoint distance from START to END;
+2. heat-up step, frame 1, element midpoint distance from START to END;
+3. remaining heat-up frames in increasing frame order;
+4. cool-down step, frame 0, pipe distance from START to END; and
+5. remaining cool-down frames through its last frame in increasing order.
 
 Thus the ordered element-distance sequence restarts for each new frame. Because
 distances are located at element midpoints, the first value is normally half
@@ -347,9 +349,9 @@ the last element length before the total route length. When pipe element
 selectors are used, only selected elements on the START-to-END route appear.
 
 The intermediate report does not pair frames and does not contain a per-frame
-Delta S11. The final calculation still independently creates maximum and
-minimum envelopes from all frames in each step, then subtracts each matching
-second-step envelope from its first-step envelope.
+Delta S11. It lists every frame from both steps for review. The final
+calculation creates maximum and minimum envelopes from all heat-up frames and
+subtracts the matching S11 value from only the cool-down step's last frame.
 
 The intermediate report can be very large because it includes every frame,
 section point, contributing element, and path node. It is tab-delimited and is
@@ -367,15 +369,15 @@ S11 is requested at ELEMENT_NODAL position so every result is associated with
 a pipe path node. Abaqus may extrapolate integration-point results when it
 creates this read-only subset. The ODB itself is not modified.
 
-Each step is first enveloped independently over all of its frames to obtain
-both a maximum and a minimum at every location. Locations from the two step
-envelopes are then compared only when node label, element label, and section
-point match. Section points are matched by section-point number when that
-number is available; their descriptions are used only when no number is
-available. A controlling frame in the first step does not have to equal the
-corresponding controlling frame in the second step. Duplicate finite values at
-an identical location within one frame are averaged. NaN and infinite values
-are ignored.
+The heat-up step is enveloped over all of its frames to obtain both a maximum
+and a minimum at every location. Those heat-up envelopes are compared with the
+cool-down step's last-frame values only when node label, element label, and
+section point match. Section points are matched by section-point number when
+that number is available; their descriptions are used only when no number is
+available. The controlling heat-up frame may be any heat-up frame; the
+cool-down control is always its zero-based last frame. Duplicate finite values
+at an identical location within one frame are averaged. NaN and infinite
+values are ignored.
 
 For the optional intermediate wide table only, the element-nodal S11 values at
 the nodes of one element are averaged to give that element's section-point S11.
@@ -465,14 +467,16 @@ abaqus python extract_pipe_s11_delta_step_pairs.py --odb "model.odb" --step-pair
 
 The script prints a completion line after every processed frame, for example:
 
-Pair 1/1, first step 'Step-22': frame 15/86 complete (17.4%); finite samples=24576, cumulative=368640
-Pair 1/1, second step 'Step-23': frame 21/103 complete (20.4%); finite samples=24576, cumulative=516096
+Pair 1/1, heat-up step 'Step-22' (all frames): scan 15/86 complete (17.4%); ODB frame=14; finite samples=24576, cumulative scanned=368640
+Pair 1/1, cool-down step 'Step-23' (last frame used): scan 1/1 complete (100.0%); ODB frame=102; finite samples=24576, cumulative scanned=24576
 
-Each progress line identifies the step pair, first or second step, completed
-frame count, percentage, finite samples in that frame, and cumulative samples
-for that step. Output is flushed immediately, so the lines also appear promptly
-when the command output is redirected to a console text file. A single large
-frame can still take time before its completion line appears.
+Each progress line identifies the step pair, heat-up or cool-down role, scan
+count, actual zero-based ODB frame, percentage, finite samples in that frame,
+and cumulative scanned samples. Without --write-intermediate, only the last
+cool-down frame is scanned. With --write-intermediate, all cool-down frames are
+listed in the intermediate report, but only the last one affects Delta S11.
+Output is flushed immediately. A single large frame can still take time before
+its completion line appears.
 
 Even in verbose mode, detailed errors and complete lists of available element
 sets are written to the log instead of being printed. Explicit listing commands
@@ -528,15 +532,16 @@ Troubleshooting
 3. Final cells are blank
 
    Confirm S11 was requested as field output for the relevant steps and pipe
-   elements. Also confirm that the independently calculated step envelopes
+   elements. Also confirm that the heat-up envelope and cool-down last frame
    contain matching node, element, and section-point locations. Matching counts
    and source fields are recorded in the log.
 
 4. The steps have different numbers of frames
 
-   This is allowed. All frames in each step are used to calculate that step's
-   S11 maximum and minimum. Frames are not paired and the two frame counts do
-   not have to match. The log records both frame and sample counts.
+   This is allowed. All heat-up frames are used for the heat-up maximum and
+   minimum; only the cool-down last frame is used. Frames are not paired and
+   the two frame counts do not have to match. The log records both frame counts
+   and the exact zero-based cool-down frame used.
 
 5. The selected elements produce no output
 
