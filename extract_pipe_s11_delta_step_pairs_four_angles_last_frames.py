@@ -1,16 +1,13 @@
 from __future__ import print_function
 
-"""Calculate four-angle heat-up to cool-down pipe S11 changes.
+"""Calculate four-angle last-frame pipe S11 changes for step pairs.
 
 The script is self-contained and runs with ``abaqus python``. S11 is retained
-at four target angles. The first step in each pair is the heat-up step and is
-enveloped over all frames. The second step is the cool-down step and only its
-last frame is used in the delta calculation. Intermediate values are processed
-in memory unless ``--write-intermediate`` is supplied. Only section points at
--90, 0, 90, and 180 degrees are retained while each required frame is scanned.
-The report contains both maximum- and minimum-heat-up-envelope signed delta
-S11 profiles along the pipeline path. The final data is split into inner-,
-middle-, and outer-fiber workbooks with native editable Excel charts.
+at four target angles. Only the last frame of the first (heat-up) step and the
+last frame of the second (cool-down) step are read. Delta S11 is heat-up last
+frame minus cool-down last frame at each matching location. Only section points
+at -90, 0, 90, and 180 degrees are retained. The final data is split into
+inner-, middle-, and outer-fiber workbooks with native editable Excel charts.
 """
 
 import argparse
@@ -28,7 +25,7 @@ from odbAccess import openOdb
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_VERSION = "2026-09-26-four-angles-r4"
+SCRIPT_VERSION = "2026-09-26-four-angles-last-frames-r1"
 DEFAULT_INSTANCE = "PART-1-1"
 DEFAULT_PRECISION = 8
 
@@ -62,9 +59,9 @@ class BulkStepPairsAction(argparse.Action):
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description=(
-            "Calculate signed delta S11 at -90, 0, 90, and 180 degrees. "
-            "For each pair, the first step is heat-up (all frames) and the "
-            "second step is cool-down (last frame only)."
+            "Calculate last-frame signed delta S11 at -90, 0, 90, and 180 "
+            "degrees. For each pair, only the last heat-up and cool-down "
+            "frames are read."
         )
     )
     parser.add_argument(
@@ -182,8 +179,8 @@ def parse_arguments():
         "--write-intermediate",
         action="store_true",
         help=(
-            "Write a compact four-angle .rpt containing heat-up maximum, "
-            "heat-up minimum, and cool-down last-frame S11 only."
+            "Write a compact four-angle .rpt containing heat-up and "
+            "cool-down last-frame S11 only."
         ),
     )
     parser.add_argument(
@@ -1309,7 +1306,7 @@ def intermediate_path(
 ):
     stem = os.path.splitext(os.path.basename(odb_path))[0]
     filename = (
-        "{0}_Pair{1:03d}_{2}_TO_{3}_S11_4ANGLES_INTERMEDIATE.rpt"
+        "{0}_Pair{1:03d}_{2}_TO_{3}_S11_4ANGLES_LAST_FRAMES_INTERMEDIATE.rpt"
     ).format(
         stem,
         pair_index,
@@ -1322,7 +1319,10 @@ def intermediate_path(
 def final_report_path(output_dir, odb_path):
     stem = os.path.splitext(os.path.basename(odb_path))[0]
     return os.path.abspath(
-        os.path.join(output_dir, stem + "_MAX_DELTA_S11_4ANGLES_PATH.rpt")
+        os.path.join(
+            output_dir,
+            stem + "_LAST_FRAME_DELTA_S11_4ANGLES_PATH.rpt",
+        )
     )
 
 
@@ -1332,7 +1332,9 @@ def fiber_excel_path(output_dir, odb_path, fiber_name):
         os.path.join(
             output_dir,
             stem
-            + "_MAX_DELTA_S11_4ANGLES_{0}_FIBER.xlsx".format(fiber_name),
+            + "_LAST_FRAME_DELTA_S11_4ANGLES_{0}_FIBER.xlsx".format(
+                fiber_name
+            ),
         )
     )
 
@@ -1344,19 +1346,19 @@ def write_intermediate_report(
     first_name,
     first_step_number,
     first_frame_count,
+    heatup_last_frame_index,
     second_name,
     second_step_number,
     second_frame_count,
     cooldown_last_frame_index,
     route_distances,
     section_labels,
-    heatup_maximum,
-    heatup_minimum,
+    heatup_last,
     cooldown_last,
     precision,
 ):
     groups, display, method = resolve_fiber_angle_section_groups(
-        [{"deltas": heatup_maximum, "section_labels": section_labels}]
+        [{"deltas": heatup_last, "section_labels": section_labels}]
     )
     section_columns = []
     selected_identities = set()
@@ -1367,8 +1369,7 @@ def write_intermediate_report(
             section_columns.append((fiber_name, angle, identity))
             selected_identities.add(identity)
     quantity_columns = (
-        ("HEATUP MAX S11", heatup_maximum),
-        ("HEATUP MIN S11", heatup_minimum),
+        ("HEATUP LAST S11", heatup_last),
         ("COOLDOWN LAST S11", cooldown_last),
     )
     row_keys = set()
@@ -1377,14 +1378,18 @@ def write_intermediate_report(
             if location[2] in selected_identities:
                 row_keys.add((location[0], location[1]))
     with open(path, "w") as report:
-        report.write("Four-Angle Pipe S11 Envelope Intermediate Results\n")
+        report.write("Four-Angle Pipe S11 Last-Frame Intermediate Results\n")
         report.write("Script version: {0}\n".format(SCRIPT_VERSION))
         report.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
         report.write("Instance: {0}\n".format(instance_name))
         report.write(
-            "First step: {0} = {1} (HEAT-UP; maximum and minimum over "
-            "all {2} frames)\n".format(
+            "First step: {0} = {1} (HEAT-UP; {2} total frames)\n".format(
                 first_step_number, first_name, first_frame_count
+            )
+        )
+        report.write(
+            "Heat-up S11 shown below is from zero-based last frame {0}.\n".format(
+                heatup_last_frame_index
             )
         )
         report.write(
@@ -1579,6 +1584,10 @@ def calculate_pair_profile(
             "Step pair '{0}' -> '{1}' cannot be compared because one or "
             "both steps contain no frames.".format(first_name, second_name)
         )
+    heatup_last_frame_index = len(first_frames) - 1
+    heatup_last_frame = first_frames[heatup_last_frame_index]
+    heatup_frames_to_scan = [heatup_last_frame]
+    heatup_frame_indices = [heatup_last_frame_index]
     cooldown_last_frame_index = len(second_frames) - 1
     cooldown_last_frame = second_frames[cooldown_last_frame_index]
     cooldown_frames_to_scan = [cooldown_last_frame]
@@ -1609,15 +1618,17 @@ def calculate_pair_profile(
                 second_name,
             )
         first_envelope = scan_step_s11_envelope(
-            first_frames,
+            heatup_frames_to_scan,
             instance,
             output_nodes,
             output_element_labels,
             route_distances,
             progress_callback,
-            "Pair {0}/{1}, heat-up step '{2}' (all frames)".format(
+            "Pair {0}/{1}, heat-up step '{2}' (last frame used)".format(
                 pair_index, pair_count, first_name
             ),
+            frame_indices=heatup_frame_indices,
+            envelope_frame_indices=(heatup_last_frame_index,),
         )
         second_envelope = scan_step_s11_envelope(
             cooldown_frames_to_scan,
@@ -1695,8 +1706,8 @@ def calculate_pair_profile(
                 }
         if progress_callback is not None:
             progress_callback(
-                "Pair {0}/{1}: heat-up envelope minus cool-down last-frame "
-                "comparison complete; matched "
+                "Pair {0}/{1}: heat-up last-frame minus cool-down "
+                "last-frame comparison complete; matched "
                 "locations={2}".format(
                     pair_index, pair_count, len(common_locations)
                 )
@@ -1718,6 +1729,7 @@ def calculate_pair_profile(
                 first_name,
                 first_step_number,
                 len(first_frames),
+                heatup_last_frame_index,
                 second_name,
                 second_step_number,
                 len(second_frames),
@@ -1725,7 +1737,6 @@ def calculate_pair_profile(
                 route_distances,
                 intermediate_section_labels,
                 first_values,
-                first_minimum_values,
                 second_values,
                 precision,
             )
@@ -1743,6 +1754,8 @@ def calculate_pair_profile(
         "second": second_name,
         "first_frames": len(first_frames),
         "second_frames": len(second_frames),
+        "heatup_last_frame": heatup_last_frame_index,
+        "heatup_last_time": frame_time(heatup_last_frame),
         "cooldown_last_frame": cooldown_last_frame_index,
         "cooldown_last_time": frame_time(cooldown_last_frame),
         "maximum": maximum_by_node,
@@ -2138,13 +2151,14 @@ def write_fiber_excel_workbooks(
                             ].get(node_label)
                         )
             rows.append(row)
-        title = "{0} Fiber - Delta S11 Envelopes Along Pipeline Path".format(
-            fiber_name.title()
-        )
+        title = (
+            "{0} Fiber - Last-Frame Delta S11 Along Pipeline Path"
+        ).format(fiber_name.title())
         note = (
             "ODB: {0}. Enter HEAT-UP first and COOL-DOWN second. "
-            "MAX = max(all heat-up frames) - S11(cool-down last frame); "
-            "MIN = min(all heat-up frames) - S11(cool-down last frame)."
+            "Delta S11 = S11(heat-up last frame) - "
+            "S11(cool-down last frame). MAX/MIN are spatial envelopes "
+            "across contributing elements."
         ).format(odb_name)
         section_note = "Section points: {0}".format(
             "; ".join(
@@ -2216,7 +2230,7 @@ def write_final_report(
         )
     with open(path, "w") as report:
         report.write(
-            "Four-Angle Pipe Delta S11 Envelopes Along Pipeline Path\n"
+            "Four-Angle Last-Frame Pipe Delta S11 Along Pipeline Path\n"
         )
         report.write("Script version: {0}\n".format(SCRIPT_VERSION))
         report.write("ODB: {0}\n".format(odb_path.replace("\\", "/")))
@@ -2238,17 +2252,15 @@ def write_final_report(
             "and 180 degrees only.\n"
         )
         report.write(
-            "At each matching element/node/section-point location: MAX "
-            "Delta S11 = max(S11 over all HEAT-UP frames) - S11 at the "
-            "last COOL-DOWN frame; MIN Delta S11 = min(S11 over all "
-            "HEAT-UP frames) - S11 at the last COOL-DOWN frame.\n"
+            "At each matching element/node/section-point location: Delta "
+            "S11 = S11 at the last HEAT-UP frame - S11 at the last "
+            "COOL-DOWN frame.\n"
         )
         report.write(
             "Enter the HEAT-UP step first and the COOL-DOWN step second. "
-            "Frames are not paired. Only the heat-up step is enveloped; "
-            "the cool-down step contributes its last frame only. "
-            "For each radius/angle, MAX is the greatest signed MAX delta "
-            "and MIN is the smallest signed MIN delta across contributing "
+            "Only the last frame of each step is read. For each "
+            "radius/angle, MAX is the greatest signed last-frame delta "
+            "and MIN is the smallest signed last-frame delta across contributing "
             "pipe elements at each path node. Positive and negative radius "
             "section points are not combined.\n"
         )
@@ -2265,12 +2277,14 @@ def write_final_report(
         for index, profile in enumerate(profiles, 1):
             report.write(
                 "Pair {0}: HEAT-UP '{1}' -> COOL-DOWN '{2}'; heat-up "
-                "frames={3}; cool-down frames={4}, last frame used={5}; "
-                "delta samples={6}/{7}; matched locations={8}\n".format(
+                "frames={3}, last frame used={4}; cool-down frames={5}, "
+                "last frame used={6}; delta samples={7}/{8}; matched "
+                "locations={9}\n".format(
                     index,
                     profile["first"],
                     profile["second"],
                     profile["first_frames"],
+                    profile["heatup_last_frame"],
                     profile["second_frames"],
                     profile["cooldown_last_frame"],
                     profile["first_samples"],
@@ -2494,13 +2508,14 @@ def process_odb(odb_path, output_dir, args, progress_callback=None):
         for index, profile in enumerate(profiles, 1):
             messages.append(
                 "Pair {0}: HEAT-UP '{1}' -> COOL-DOWN '{2}'; heat-up "
-                "frames={3}; cool-down frames={4}, last frame used={5}; "
-                "delta samples={6}/{7}; matched locations={8}; S11 "
-                "sources={9}".format(
+                "frames={3}, last frame used={4}; cool-down frames={5}, "
+                "last frame used={6}; delta samples={7}/{8}; matched "
+                "locations={9}; S11 sources={10}".format(
                     index,
                     profile["first"],
                     profile["second"],
                     profile["first_frames"],
+                    profile["heatup_last_frame"],
                     profile["second_frames"],
                     profile["cooldown_last_frame"],
                     profile["first_samples"],
@@ -2628,7 +2643,8 @@ def print_endpoint_sets(odb_path, instance_name):
 def write_log(log_path, input_dir, output_dir, successes, failures):
     with open(log_path, "w") as log_file:
         log_file.write(
-            "extract_pipe_s11_delta_step_pairs_four_angles.py version "
+            "extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py "
+            "version "
             "{0}\n".format(
                 SCRIPT_VERSION
             )
@@ -2641,24 +2657,20 @@ def write_log(log_path, input_dir, output_dir, successes, failures):
             "Step-pair input order: HEAT-UP first, COOL-DOWN second\n"
         )
         log_file.write(
-            "Frame handling: all heat-up frames are enveloped; only the "
-            "last cool-down frame is used\n"
+            "Frame handling: only the last heat-up frame and last "
+            "cool-down frame are read\n"
         )
         log_file.write(
             "Section-angle filter per frame: -90, 0, 90, and 180 "
             "degrees only\n"
         )
         log_file.write(
-            "MAX delta at matching location: max S11 over all heat-up "
-            "frames - S11 at the last cool-down frame\n"
+            "Delta at matching location: S11 at the last heat-up frame "
+            "- S11 at the last cool-down frame\n"
         )
         log_file.write(
-            "MIN delta at matching location: min S11 over all heat-up "
-            "frames - S11 at the last cool-down frame\n"
-        )
-        log_file.write(
-            "Final envelopes by radius/angle: greatest signed MAX delta "
-            "and smallest signed MIN delta across contributing elements\n"
+            "Final spatial envelopes by radius/angle: greatest signed MAX "
+            "delta and smallest signed MIN delta across contributing elements\n"
         )
         log_file.write("Successful ODBs: {0}\n".format(len(successes)))
         log_file.write("Failed ODBs: {0}\n".format(len(failures)))
@@ -2678,7 +2690,8 @@ def main():
     progress_callback = emit_progress if args.verbose else None
     if args.verbose:
         progress_callback(
-            "extract_pipe_s11_delta_step_pairs_four_angles.py version "
+            "extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py "
+            "version "
             "{0}".format(
                 SCRIPT_VERSION
             )
@@ -2714,7 +2727,8 @@ def main():
             if progress_callback is not None:
                 progress_callback("FAILED: {0}".format(odb_path))
     log_path = os.path.join(
-        output_dir, "extract_pipe_s11_delta_step_pairs_four_angles.log"
+        output_dir,
+        "extract_pipe_s11_delta_step_pairs_four_angles_last_frames.log",
     )
     write_log(log_path, input_dir, output_dir, successes, failures)
     if progress_callback is not None:

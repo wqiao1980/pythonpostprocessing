@@ -1,12 +1,12 @@
 Abaqus Python Postprocessing Scripts - Complete User Manual
 ============================================================
 
-Manual date: 2026-09-07
+Manual date: 2026-09-26
 Script folder used in the examples:
 
     C:\python_aba\takeoutSFSM
 
-This manual covers all 12 Python postprocessing scripts currently in that
+This manual covers all 13 Python postprocessing scripts currently in that
 folder. It describes what each script does, whether it imports another local
 script, the complete command-line option set, practical command examples, the
 help command, console/log capture, and how to stop a running extraction.
@@ -32,6 +32,7 @@ CONTENTS
    5.10 extract_pipe_connector_spring_history.py
    5.11 extract_pipe_s11_delta_step_pairs.py
    5.12 extract_pipe_s11_delta_step_pairs_four_angles.py
+   5.13 extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py
 6. Command index by function
 7. Troubleshooting command-line problems
 
@@ -46,7 +47,7 @@ To work from the script folder:
 
     cd /d "C:\python_aba\takeoutSFSM"
 
-Eleven scripts use this launcher:
+Twelve scripts use this launcher:
 
     abaqus python "C:\python_aba\takeoutSFSM\SCRIPT_NAME.py" [script options]
 
@@ -106,6 +107,7 @@ extract_lccdcc_pipe_input.py                             None
 extract_pipe_connector_spring_history.py                 None
 extract_pipe_s11_delta_step_pairs.py                     None
 extract_pipe_s11_delta_step_pairs_four_angles.py         None
+extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py  None
 
 All scripts require the Abaqus Python/ODB libraries. The word "None" means
 that the script does not import another local postprocessing script; it does
@@ -176,8 +178,9 @@ position twice:
     --step-range 7 7
 
 --steps and --step-range are alternatives; do not use both in one command.
-The S11 delta scripts are different: they use one or more --step-pair FIRST
-SECOND options, and FIRST/SECOND may be exact names or 1-based positions.
+The S11 delta scripts are different. Use repeatable --step-pair HEATUP
+COOLDOWN options, or enter a compact list with --step-pairs HEATUP1 COOLDOWN1
+HEATUP2 COOLDOWN2 [...]. References may be exact names or 1-based positions.
 
 Frame selection
 ---------------
@@ -264,9 +267,7 @@ it could stop another Abaqus analysis or an unrelated Python job.
 
 ODBs are opened read-only, so stopping postprocessing does not modify the ODB.
 The current .rpt, .txt, .xlsx, .log, or console file may be incomplete. Rerun
-the same command to overwrite it. A forced stop of an S11 delta run can leave
-an s11_intermediate_*.tmp file in the output folder; delete it only after
-confirming that the postprocessing process has stopped.
+the same command to overwrite it.
 
 
 5. SCRIPT REFERENCE
@@ -1058,23 +1059,25 @@ to the diagnostic log, not printed during normal/verbose extraction. Explicit
 
 What it does
 
-Original, complete-section-point S11 delta script. It reads every frame and
-every available pipe section point for each requested step pair. At matching
-element/node/section-point locations:
+Original, complete-section-point S11 delta script. The first reference in each
+pair is HEAT-UP and the second is COOL-DOWN. It reads all heat-up frames and
+uses only the last cool-down frame. At matching element/node/section-point
+locations:
 
-    MAX Delta S11 = max(all frames of first step)
-                    - max(all frames of second step)
+    MAX Delta S11 = max(all frames of heat-up step)
+                    - S11(last frame of cool-down step)
 
-    MIN Delta S11 = min(all frames of first step)
-                    - min(all frames of second step)
+    MIN Delta S11 = min(all frames of heat-up step)
+                    - S11(last frame of cool-down step)
 
 Frames are not paired and frame counts may differ. Final path-node envelopes
 retain MAX and MIN separately at -90, 0, 90, and 180 degrees for the inner,
 middle, and outer radii. Positive and negative radius points are not combined.
 
-It always writes one wide final .rpt and three editable Excel workbooks. Raw
-frame-by-frame intermediate S11 is written only with --write-intermediate.
-Use --verbose for immediate frame-completion progress.
+It always writes one wide final .rpt and three editable Excel workbooks. With
+--write-intermediate, it writes a compact four-angle table containing only the
+heat-up maximum, heat-up minimum, and final cool-down-frame S11. Raw per-frame
+S11 is never written. Use --verbose for immediate frame-completion progress.
 
 Default instance: PART-1-1
 Default element selection: all supported PIPE* elements on the route
@@ -1096,7 +1099,8 @@ Complete option syntax
         [--odb ODB] ...
         [--output-dir DIR]
         [--instance INSTANCE]
-        --step-pair FIRST SECOND [--step-pair FIRST SECOND ...]
+        [--step-pair HEATUP COOLDOWN] ...
+        [--step-pairs HEATUP1 COOLDOWN1 [HEATUP2 COOLDOWN2 ...]]
         [--pipe-element-set SET] ...
         [--pipe-element LABEL [LABEL ...]] ...
         [--pipe-element-range FIRST LAST] ...
@@ -1112,8 +1116,8 @@ Complete option syntax
         [--verbose]
 
 There is no --steps, --step-range, --frame-index, or --output-name option.
-For extraction, at least one --step-pair is required. Listing commands do not
-require a pair.
+For extraction, at least one pair from --step-pair or --step-pairs is required.
+Listing commands do not require a pair.
 
 Help
 
@@ -1134,6 +1138,13 @@ One named step pair
 Several named pairs
 
     abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair "AsLaid" "Hydrotest" --step-pair "Hydrotest" "Operation"
+
+Compact list of many pairs; interpreted as 10->11, 14->15, and 22->23
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pairs 10 11 14 15 22 23
+
+The compact list must contain an even number of references. Enter heat-up
+first and cool-down second in every consecutive pair.
 
 Pairs by 1-based positions, or mixed position/name
 
@@ -1173,12 +1184,14 @@ section 5.12 is usually the better production choice.
 
 What it does
 
-Separate optimized S11 delta variant. It uses the same MAX/MIN definitions,
-step-pair direction, independent frame envelopes, path logic, radius groups,
-final tables, and editable charts as the original. It filters section points
+Separate optimized S11 delta variant. It uses the same heat-up maximum/minimum
+and cool-down last-frame definitions, step-pair direction, path logic, radius
+groups, final tables, and editable charts as the original. It filters section points
 to -90, 0, 90, and 180 degrees while each frame is scanned, reducing retained
 data for a 16-angle/3-radius section from 48 to 12 section points per
 element/node. It does not import, modify, or overwrite the original script.
+Its optional intermediate report contains the same three compact four-angle
+S11 summaries and never contains raw per-frame rows.
 
 Default instance: PART-1-1
 Default element selection: all supported PIPE* elements on the route
@@ -1200,7 +1213,8 @@ Complete option syntax
         [--odb ODB] ...
         [--output-dir DIR]
         [--instance INSTANCE]
-        --step-pair FIRST SECOND [--step-pair FIRST SECOND ...]
+        [--step-pair HEATUP COOLDOWN] ...
+        [--step-pairs HEATUP1 COOLDOWN1 [HEATUP2 COOLDOWN2 ...]]
         [--pipe-element-set SET] ...
         [--pipe-element LABEL [LABEL ...]] ...
         [--pipe-element-range FIRST LAST] ...
@@ -1235,6 +1249,10 @@ One or several step pairs
 
     abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 3 7 --step-pair 7 10
 
+Compact list of many pairs; interpreted as 10->11, 14->15, and 22->23
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pairs 10 11 14 15 22 23
+
 Pipe selectors and exact endpoints
 
     abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair 22 23 --pipe-element-set "PIPE_SET" --pipe-element 1500 --pipe-element-range 2001 2200 --start-node-set "PIPE_START_NODE" --end-node-set "PIPE_END_NODE"
@@ -1250,6 +1268,97 @@ Optional four-angle intermediate report
 Console capture
 
     abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose > "C:\Data\Results\delta_s11_4angles_console.txt" 2>&1
+
+
+5.13 extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py
+------------------------------------------------------------------
+
+What it does
+
+Fast, independent four-angle S11 delta variant for heat-up/cool-down pairs.
+For every pair it reads only the last frame of the heat-up step and the last
+frame of the cool-down step. It retains the -90, 0, 90, and 180 degree section
+points at the inner, middle, and outer radii and calculates:
+
+    Delta S11 = S11(heat-up last frame) - S11(cool-down last frame)
+
+It therefore performs two frame reads per pair, regardless of how many earlier
+frames are present in either step. Final MAX and MIN values are spatial
+envelopes across pipe elements contributing at the same path node; they are
+not temporal frame envelopes. The script does not import or overwrite either
+of the other S11 delta scripts.
+
+Default instance: PART-1-1
+Default element selection: all supported PIPE* elements on the route
+Default outputs for model.odb:
+    model_LAST_FRAME_DELTA_S11_4ANGLES_PATH.rpt
+    model_LAST_FRAME_DELTA_S11_4ANGLES_INNER_FIBER.xlsx
+    model_LAST_FRAME_DELTA_S11_4ANGLES_MIDDLE_FIBER.xlsx
+    model_LAST_FRAME_DELTA_S11_4ANGLES_OUTER_FIBER.xlsx
+Optional intermediate pattern:
+    model_Pair001_Heatup_TO_Cooldown_S11_4ANGLES_LAST_FRAMES_INTERMEDIATE.rpt
+Diagnostic log: extract_pipe_s11_delta_step_pairs_four_angles_last_frames.log
+Launcher: abaqus python
+Dependency: none
+
+Complete option syntax
+
+    extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py
+        [--input-dir DIR]
+        [--odb ODB] ...
+        [--output-dir DIR]
+        [--instance INSTANCE]
+        [--step-pair HEATUP COOLDOWN] ...
+        [--step-pairs HEATUP1 COOLDOWN1 [HEATUP2 COOLDOWN2 ...]]
+        [--pipe-element-set SET] ...
+        [--pipe-element LABEL [LABEL ...]] ...
+        [--pipe-element-range FIRST LAST] ...
+        [--start-node LABEL]
+        [--end-node LABEL]
+        [--start-node-set SET]
+        [--end-node-set SET]
+        [--write-intermediate]
+        [--precision 1_TO_12]
+        [--list-steps]
+        [--list-pipe-element-sets]
+        [--list-endpoint-sets]
+        [--verbose]
+
+There is no --steps, --step-range, --frame-index, or --output-name option.
+The first member of every pair must be the heat-up step and the second must be
+the cool-down step. Step names and 1-based step positions are both supported.
+
+Help
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --help
+
+List steps
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --list-steps
+
+One pair using step numbers
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose
+
+Compact list of many pairs; interpreted as 10->11, 14->15, and 22->23
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pairs 10 11 14 15 22 23 --verbose
+
+Several pairs using step names
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --step-pair "Heatup-1" "Cooldown-1" --step-pair "Heatup-2" "Cooldown-2"
+
+Optional compact intermediate report
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pairs 10 11 14 15 --write-intermediate --precision 6 --verbose
+
+The intermediate report has one row per selected pipe element and 27 columns:
+pipeline distance, node label, element label, twelve heat-up-last-frame S11
+columns, and twelve cool-down-last-frame S11 columns.
+
+Console capture
+
+    abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py" --input-dir "C:\Data\ODBs" --odb "model.odb" --output-dir "C:\Data\Results" --step-pair 22 23 --verbose > "C:\Data\Results\delta_s11_last_frames_console.txt" 2>&1
 
 
 6. COMMAND INDEX BY FUNCTION
@@ -1294,6 +1403,7 @@ Select one numbered step
 Select S11 delta step pairs
 
     --step-pair 3 7 --step-pair 7 10
+    --step-pairs 3 7 7 10 12 15
 
 Select the first frame, a particular frame, or the last usable frame
 
@@ -1346,7 +1456,7 @@ Show progress on scripts that support verbose mode
 
     --verbose
 
-Write optional raw S11 intermediate data
+Write the optional compact four-angle S11 summary
 
     --write-intermediate
 
@@ -1420,9 +1530,12 @@ model results could exceed it:
 
 Problem: the S11 run is too slow.
 
-Use extract_pipe_s11_delta_step_pairs_four_angles.py and omit
---write-intermediate unless raw data are required. Limit the run to one ODB and
-the necessary pipe elements when appropriate.
+If the engineering calculation permits last-frame-to-last-frame subtraction,
+use extract_pipe_s11_delta_step_pairs_four_angles_last_frames.py. It reads only
+two frames per pair. Otherwise use extract_pipe_s11_delta_step_pairs_four_angles.py,
+which scans all heat-up frames for its temporal maximum/minimum envelopes.
+Limiting either run to one ODB and the necessary pipe elements also reduces
+processing time.
 
 
 END OF MANUAL

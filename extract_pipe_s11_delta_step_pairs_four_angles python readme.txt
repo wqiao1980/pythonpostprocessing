@@ -25,11 +25,11 @@ For every user-defined pair of steps, it:
   each for the inner, middle, and outer fiber, with one native editable chart
   for every requested step pair.
 
-Raw frame-by-frame S11 values are not written unless --write-intermediate is
-entered. The heat-up maximum/minimum envelopes and the selected cool-down last
-frame are handled in memory and are not included as separate summary blocks in
-the intermediate report. The three final Excel workbooks are always created;
-intermediate values remain in .rpt format only when requested.
+Raw frame-by-frame S11 values are never written. When --write-intermediate is
+entered, the script writes only the heat-up maximum envelope, heat-up minimum
+envelope, and last-frame cool-down S11 at -90, 0, 90, and 180 degrees. The
+three final Excel workbooks are always created; intermediate envelope values
+remain in .rpt format only when requested.
 
 This is a separate optimized variant. It does not import, change, or overwrite
 extract_pipe_s11_delta_step_pairs.py. Its Python script, log, final report,
@@ -57,9 +57,8 @@ locations from 48 to 12 section points per element/node. For example:
 That is a 75 percent reduction in numeric samples retained and enveloped. The
 Abaqus field-output collection must still be traversed to identify each value's
 section point, so the actual elapsed-time improvement depends on ODB storage,
-disk speed, element count, and frame count. Without --write-intermediate, both
-scripts scan only the final cool-down frame instead of every cool-down frame;
-this variant also skips the per-frame location sort.
+disk speed, element count, and frame count. Both scripts scan only the final
+cool-down frame. This variant also skips the per-frame location sort.
 
 
 Important calculation definitions
@@ -123,17 +122,32 @@ Process one ODB only:
 
 abaqus python "C:\python_aba\takeoutSFSM\extract_pipe_s11_delta_step_pairs_four_angles.py" --input-dir "C:\Data\BPTiberFL6" --odb "model.odb" --output-dir "C:\Data\BPTiberFL6\02_Results" --step-pair "HeatUp" "CoolDown"
 
+Process several pairs using one compact option:
+
+abaqus python extract_pipe_s11_delta_step_pairs_four_angles.py --step-pairs 10 11 14 15 22 23
+
 
 Select step pairs
 -----------------
 
-At least one --step-pair HEATUP_STEP COOLDOWN_STEP is required. The first
-entry must be the heat-up step and the second entry must be the cool-down step.
-Repeat the option to request more than one heat-up/cool-down pair.
+At least one pair is required. In every pair, the first entry must be the
+heat-up step and the second entry must be the cool-down step.
+
+For one pair, or for the original repeatable syntax, use --step-pair:
 
 Use exact step names:
 
 abaqus python extract_pipe_s11_delta_step_pairs_four_angles.py --step-pair "HeatUp-1" "CoolDown-1" --step-pair "HeatUp-2" "CoolDown-2"
+
+For a long list, use --step-pairs once and enter consecutive references:
+
+abaqus python extract_pipe_s11_delta_step_pairs_four_angles.py --step-pairs 10 11 14 15 22 23
+
+This is interpreted as the three pairs 10->11, 14->15, and 22->23. You do not
+repeat --step-pairs before each pair. An even number of references is required.
+Exact step names work the same way; quote each name if it contains spaces:
+
+abaqus python extract_pipe_s11_delta_step_pairs_four_angles.py --step-pairs "HeatUp-1" "CoolDown-1" "HeatUp-2" "CoolDown-2"
 
 Use 1-based step positions instead of whole names:
 
@@ -260,7 +274,7 @@ These headings appear on one tab-delimited header row. They are shown one per
 line above only for readability.
 
 There is only one location column: Pipeline Distance. A node-label column is
-not written. Each --step-pair adds exactly twenty-four adjacent result columns.
+not written. Each selected pair adds exactly twenty-four adjacent result columns.
 MAX and MIN are adjacent for each angle. The order is INNER at all four angles,
 MIDDLE at all four angles, then OUTER at all four angles. Additional pairs
 repeat this twenty-four-column group to the right in command-line order. Blank
@@ -306,12 +320,8 @@ names are overwritten on a new run.
 Optional intermediate report
 ----------------------------
 
-By default, the script does not write raw S11 to a file. It scans one step at a
-time and retains only the maximum and minimum S11 at each element/node/section-
-point location and the signed MAX/MIN Delta S11 envelopes needed for the final
-report.
-
-To request all intermediate values, add:
+By default, the script does not write an intermediate S11 file. To request the
+compact envelope summary, add:
 
 --write-intermediate
 
@@ -323,68 +333,34 @@ For each ODB and each requested pair, this writes a file whose name looks like:
 
 model_Pair001_HeatUp_TO_CoolDown_S11_4ANGLES_INTERMEDIATE.rpt
 
-The intermediate report contains one wide tab-delimited table. Its first five
-columns are always:
+The intermediate report contains one wide tab-delimited table. Its first three
+columns are:
 
 Pipe Distance
-Node Number(s)
+Node Number
 Element Number
-Step Number
-Frame Number
 
-Every remaining column contains S11 for one section point. Each heading gives
-the output thick-pipe angle, signed radius, and Abaqus section-point number. For
-example:
+The remaining thirty-six columns are three groups of twelve:
 
-S11 ANGLE -90 DEG RADIUS +0.67771 [SP 1]
-S11 ANGLE -90 DEG RADIUS +0.838855 [SP 2]
-S11 ANGLE -90 DEG RADIUS +1 [SP 3]
-S11 ANGLE 0 DEG RADIUS +0.67771 [SP 13]
+1. HEATUP MAX S11: maximum over all heat-up frames;
+2. HEATUP MIN S11: minimum over all heat-up frames; and
+3. COOLDOWN LAST S11: S11 from the final cool-down frame only.
 
-Columns are ordered first by angle, then from the smallest absolute radius to
-the largest absolute radius. Positive and negative radius values remain
-separate. Unlike the original script, angles outside -90, 0, 90, and 180
-degrees are filtered out and do not appear in the intermediate table.
+Within each group, columns cover inner, middle, and outer fibers at -90, 0, 90,
+and 180 degrees. No other angles are written or retained by this optimized
+variant. The report header records both step names, their 1-based positions and
+frame counts, and the zero-based cool-down frame used.
 
-Step Number is the 1-based position of the step in the ODB. The report header
-maps each number to its complete step name. Frame Number is the zero-based
-Abaqus frame index. Thus frame 0 is the first frame of that step.
+Each row is one exact element-node location. Pipe Distance is that node's
+distance along the START-to-END path. If two adjacent pipe elements share a
+node, they appear in separate rows with the same node distance; their S11
+values are never averaged together. Blank cells mean that a matching result
+was unavailable. Rows are ordered by pipe distance, node number, and element
+number.
 
-Each data row represents one start-to-end path element for one step and frame.
-Pipe Distance is the midpoint station of that element, calculated as one half
-of the sum of the route distances at its first and last path nodes. Node
-Number(s) lists the nodes belonging to that element; for example, 101,102 means
-that the element connects nodes 101 and 102. Element Number contains exactly
-one pipe element label.
-
-For every section point, the intermediate S11 is the arithmetic average of the
-available element-nodal S11 values belonging to that same element. S11 is never
-averaged with an adjacent pipe element. A blank S11 cell means that the section-
-point value was not available for that element and frame.
-
-Rows are ordered as follows:
-
-1. heat-up step, frame 0, element midpoint distance from START to END;
-2. heat-up step, frame 1, element midpoint distance from START to END;
-3. remaining heat-up frames in increasing frame order;
-4. cool-down step, frame 0, pipe distance from START to END; and
-5. remaining cool-down frames through its last frame in increasing order.
-
-Thus the ordered element-distance sequence restarts for each new frame. Because
-distances are located at element midpoints, the first value is normally half
-the first element length rather than zero, and the last value is normally half
-the last element length before the total route length. When pipe element
-selectors are used, only selected elements on the START-to-END route appear.
-
-The intermediate report does not pair frames and does not contain a per-frame
-Delta S11. It lists every frame from both steps for review. The final
-calculation creates maximum and minimum envelopes from all heat-up frames and
-subtracts the matching S11 value from only the cool-down step's last frame.
-
-The intermediate report can be very large because it includes every frame,
-section point, contributing element, and path node. It is tab-delimited and is
-not an Abaqus/CAE XY report. Intermediate data is not copied into the three
-final Excel workbooks.
+No raw heat-up or cool-down frame rows are written. The compact report is
+normally far smaller than the former frame-by-frame intermediate report and is
+not copied into the three final Excel workbooks.
 
 
 How S11 is obtained and matched
@@ -407,13 +383,10 @@ cool-down control is always its zero-based last frame. Duplicate finite values
 at an identical location within one frame are averaged. NaN and infinite
 values are ignored.
 
-For the optional intermediate wide table only, the element-nodal S11 values at
-the nodes of one element are averaged to give that element's section-point S11.
-Adjacent elements remain separate rows at separate element-midpoint distances
-and are never averaged together. Both final Delta S11 calculations remain
-element/node/section-point specific before their documented final node
-envelopes, so this intermediate presentation change does not alter the final
-.rpt or Excel results.
+The optional intermediate table keeps every matching element-node location
+separate. Adjacent elements sharing a node therefore appear as separate rows
+at the same node distance and are never averaged together. This presentation
+does not alter the final .rpt or Excel Delta S11 results.
 
 
 Inner, middle, and outer fiber identification
@@ -501,9 +474,8 @@ Pair 1/1, cool-down step 'Step-23' (last frame used): scan 1/1 complete (100.0%)
 
 Each progress line identifies the step pair, heat-up or cool-down role, scan
 count, actual zero-based ODB frame, percentage, finite samples in that frame,
-and cumulative scanned samples. Without --write-intermediate, only the last
-cool-down frame is scanned. With --write-intermediate, all cool-down frames are
-listed in the intermediate report, but only the last one affects Delta S11.
+and cumulative scanned samples. All heat-up frames and only the final
+cool-down frame are scanned whether or not --write-intermediate is used.
 Output is flushed immediately. A single large frame can still take time before
 its completion line appears.
 
@@ -531,9 +503,7 @@ another Abaqus analysis or unrelated Python process.
 The ODB is opened read-only, so terminating postprocessing does not modify it.
 A final .rpt, .xlsx, intermediate, or log file may be incomplete if the program
 is stopped while writing that file. Rerun the command to overwrite partial
-outputs. A temporary file named s11_intermediate_*.tmp can remain in the output
-directory after a forced termination; it may be deleted after confirming that
-the Abaqus postprocessing process has stopped.
+outputs.
 
 
 Independence
@@ -577,10 +547,11 @@ Troubleshooting
    Confirm that the selection contains PIPE elements on the resolved START-to-
    END route. The log records selected elements that were outside the route.
 
-6. The intermediate report is too large or the run is slow
+6. The intermediate report is larger than needed or the run is slow
 
-   Omit --write-intermediate for the normal fast mode. Restrict the run with
-   --odb and, if appropriate, pipe element sets, labels, or label ranges.
+   The report already contains only three four-angle S11 summaries per pair.
+   Restrict the run with --odb and, if appropriate, pipe element sets, labels,
+   or label ranges.
 
 7. Excel reports that a workbook is damaged
 
