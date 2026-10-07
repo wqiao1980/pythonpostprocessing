@@ -4,6 +4,10 @@ FATIGUE DAMAGE ALONG PIPELINE KP FROM ABAQUS ODB FILES
 Files in C:\SeabedAnalysis
 
   extract_stress_ranges.py     Step 1. Reads the ODB(s), writes delta-S11 reports.
+  extract_contact.py           Optional. COPEN / CPRESS along KP for the plots.
+  extract_tension_depth.py     Optional. Effective tension and Z coordinate along KP.
+  extract_mech_strain.py       Optional. Max / min mechanical strain along KP.
+  PipelineResultPlots.xlsm     Separate workbook that plots those two.
   run_fatigue_workbook.py      Step 2. Feeds the reports to the Excel workbook.
   FatigueDamageCal_ManualWorkflows_INPUT.xlsm
                                The fatigue workbook with the INPUT tab (never
@@ -145,6 +149,96 @@ Notes
     if their KP grids differ.
 
 
+COPEN / CPRESS ALONG KP (extract_contact.py)
+--------------------------------------------
+Keep extract_contact.py in the same folder as extract_stress_ranges.py (it
+uses its KP routines). The ODB needs COPEN and CPRESS in *CONTACT OUTPUT.
+
+     abaqus python extract_contact.py --odb model.odb --list
+     abaqus python extract_contact.py --odb model.odb --step 22 23
+     abaqus python extract_contact.py --odb model.odb --step 22 23 --elset DBM_MIDDLE DBM_SHOULDER
+
+   Options
+     --odb FILE          ODB file.
+     --step S1 [S2 ...]  Steps to report (number or part of the name; default
+                         the last step). One column per step.
+     --var COPEN CPRESS  Variables to extract (default both).
+     --elset N1 [N2 ...] Element sets to report, one report per set (default
+                         the whole pipeline). Nodes of a set that are not
+                         pipeline nodes, e.g. a DBM surface, get the KP of the
+                         nearest pipeline node; several nodes at one KP give
+                         the smallest COPEN / largest CPRESS.
+     --pipe-elset NAME   Pipeline set that defines KP (default PIPE_ELEMENTS).
+     --contact-key TEXT  Use only the contact output variables whose name
+                         contains TEXT (e.g. the DBM surface name). Default:
+                         all, taking the smallest COPEN / largest CPRESS.
+     --frame N           Frame in each step (default -1 = last).
+     --instance NAME     Pipeline instance, if the ODB has more than one.
+     --kp-start X        KP in metres at the start of the first element.
+     --out-dir DIR       Output folder (default contact_reports).
+     --list              Print steps, element sets and contact output names.
+
+   Output: COPEN_<set>.rpt and CPRESS_<set>.rpt (KP in m, then one column per
+   step, in model units). Import them with button 7 of the workbook.
+
+
+EFFECTIVE TENSION, Z COORDINATE AND MECHANICAL STRAIN (PipelineResultPlots.xlsm)
+--------------------------------------------------------------------------------
+Keep both scripts in the same folder as extract_stress_ranges.py.
+
+1. Effective tension and Z coordinate (needs ESF1 in *ELEMENT OUTPUT):
+
+     abaqus python extract_tension_depth.py --odb model.odb --list
+     abaqus python extract_tension_depth.py --odb model.odb --step-range 5 8
+     abaqus python extract_tension_depth.py --odb model.odb --step-range 5 8 12 14 --step 22
+
+     --step-range A B [A B ...]  Step numbers, first and last of each range.
+     --step S1 [S2 ...]          Single steps (number or part of the name).
+                                 No step given: the as-laid step (found by
+                                 "aslaid" / "as-laid" in the step name).
+     --z-step S1 [...] | all     Steps for the Z coordinate. Default: the
+                                 as-laid step only; "all" = every requested step.
+     --force-key NAME            Output to use instead of ESF1. Without ESF1
+                                 in the ODB the script uses SF1 and warns that
+                                 SF1 is the wall force, not effective tension.
+     --vertical-axis x|y|z       Global vertical axis (default z).
+     --frame, --elset, --instance, --kp-start, --out-dir as in the other scripts.
+
+   Output in pipeline_reports: EFFTENSION.rpt (at element mid-length) and
+   ZCOORD.rpt (at the nodes; COORD output if present, else initial coordinate
+   + U). One column per step, model units.
+
+2. Mechanical strain = LE11 - THE11 (needs LE and THE in *ELEMENT OUTPUT at
+   the section points):
+
+     abaqus python extract_mech_strain.py --odb model.odb --step-range 20 23
+     abaqus python extract_mech_strain.py --odb model.odb --step 22 23 --var MECH LE11 THE11
+
+     --step-range / --step       As above. No step given: the last step.
+     --var MECH LE11 THE11       What to output: MECH = LE11 - THE11 (default),
+                                 LE11, THE11; several allowed.
+     --all-frames                Maximum / minimum over all frames of each
+                                 step instead of the last frame.
+     --no-thermal                Use LE11 alone if the ODB has no THE output.
+
+   For each element the script takes the maximum and the minimum over ALL
+   section points and integration points. Output in pipeline_reports:
+   MECHSTRAIN.rpt, LE11.rpt, THE11.rpt, each with a MAX and a MIN column per
+   step, strain as a fraction.
+
+3. Plot: open PipelineResultPlots.xlsm.
+   - INPUT tab: DBM KP ranges and curve-section KP ranges. Button 3 copies
+     both tables from the INPUT tab of the fatigue workbook.
+   - Button 1: select the .rpt files (hold Ctrl for several). The EffTension
+     tab gets the effective tension and Z coordinate charts, the MechStrain
+     tab the strain charts, with amber DBM bands and blue curve bands. The
+     chart data are on the same tabs, from column Q.
+   - Button 2 redraws the charts after the KP ranges change.
+   - A new import replaces the same kind of report; up to 77 data columns
+     per report.
+   PipelineResultPlots.bas is a copy of the workbook's macro module.
+
+
 STEP 2 - RUN THE FATIGUE WORKBOOK
 ---------------------------------
 1. Before the first run, check the INPUT tab of the workbook: cycle counts,
@@ -165,6 +259,16 @@ STEP 2 - RUN THE FATIGUE WORKBOOK
    the U2 tab and adds a chart of local U2 along KP, one line per step, with
    the DBM bands, below the UC charts on the Plots tab. The chart is kept
    when button 5 rebuilds the Plots tab.
+   COPEN / CPRESS plots (optional): button 7 asks for the reports written by
+   extract_contact.py (hold Ctrl to pick several, e.g. one per element set).
+   They go to the COPEN and CPRESS tabs, one block of columns per set, and
+   each variable gets a chart on the Plots tab with one line per set and
+   step. Button 7 replaces what was imported before, so select all the
+   reports you want to see together.
+   Curve sections (optional): in the "Curve section KP ranges" table on the
+   INPUT tab (columns Y:AA) enter a KP start and end per route curve. They
+   are drawn as blue bands on every chart, next to the amber DBM bands. Press
+   button 5 (or import a report with button 6 or 7) to redraw the charts.
 2. Check the three paths at the top of run_fatigue_workbook.py
    (WORKBOOK, OUTPUT, MANIFEST). Close the OUTPUT workbook if it is open.
 3. Run:

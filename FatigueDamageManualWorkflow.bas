@@ -36,7 +36,8 @@ Private Const RESULT_RANGE_FIRST_COLUMN As Long = 21
 Private Const RANGE_SUMMARY_SHEET As String = "Fatigue_KPRangeSUM"
 ' Plots tab: charts at the top, their helper data from this row down.
 Private Const PLOTS_SHEET As String = "Plots"
-Private Const PLOTS_DATA_ROW As Long = 102
+Private Const PLOTS_DATA_ROW As Long = 142
+Private Const INPUT_SECTION_FIRST_COLUMN As Long = 25
 Private Const U2_SHEET As String = "U2"
 Private Const U2_HEADER_ROW As Long = 4
 Private Const LOAD_CASE_LIST As String = "FCD,HCD,PCD,HYDROTEST 1,HYDROTEST 2,DESIGN"
@@ -266,6 +267,46 @@ CleanExit:
 Failed:
     SetWorkflowStatus "ERROR: " & Err.Description
     MsgBox "U2 import failed: " & Err.Description, vbCritical, "Fatigue workflow"
+    Resume CleanExit
+End Sub
+
+' Button 7: imports COPEN_<set>.rpt / CPRESS_<set>.rpt reports of extract_contact.py
+' (several files can be selected) and adds the COPEN and CPRESS charts to the Plots tab.
+Public Sub ImportContactReports()
+    Dim picked As Variant, i As Long, pathList As String, fileCount As Long
+    On Error GoTo Failed
+    picked = Application.GetOpenFilename("Contact reports (*.rpt;*.txt),*.rpt;*.txt,All files (*.*),*.*", , _
+        "Select the COPEN / CPRESS reports (hold Ctrl to select several)", , True)
+    If VarType(picked) = vbBoolean Then Exit Sub
+    For i = LBound(picked) To UBound(picked)
+        pathList = pathList & "|" & CStr(picked(i))
+    Next i
+    Application.ScreenUpdating = False
+    fileCount = ImportContactCore(pathList)
+    SetWorkflowStatus "Button 7 complete. " & CStr(fileCount) & " COPEN / CPRESS report(s) imported; Plots tab updated."
+    MsgBox CStr(fileCount) & " report(s) were imported into the COPEN / CPRESS tabs." & vbCrLf & _
+           "The charts are on the Plots tab.", vbInformation, "Fatigue workflow"
+CleanExit:
+    Application.ScreenUpdating = True
+    Exit Sub
+Failed:
+    SetWorkflowStatus "ERROR: " & Err.Description
+    MsgBox "COPEN / CPRESS import failed: " & Err.Description, vbCritical, "Fatigue workflow"
+    Resume CleanExit
+End Sub
+
+' Same as button 7 without dialogs; pathList = report paths separated by "|".
+Public Sub ImportContactReportsFromPaths(ByVal pathList As String)
+    Dim fileCount As Long
+    On Error GoTo Failed
+    Application.ScreenUpdating = False
+    fileCount = ImportContactCore(pathList)
+    SetWorkflowStatus "PROGRAMMATIC CONTACT IMPORT PASSED: " & CStr(fileCount) & " report(s)"
+CleanExit:
+    Application.ScreenUpdating = True
+    Exit Sub
+Failed:
+    SetWorkflowStatus "ERROR: " & Err.Description
     Resume CleanExit
 End Sub
 
@@ -544,8 +585,31 @@ Private Sub BuildInputSheetCore()
     ws.Cells(INPUT_DBM_HEADER_ROW, RESULT_RANGE_FIRST_COLUMN + 1).Value2 = "KP Start [m]"
     ws.Cells(INPUT_DBM_HEADER_ROW, RESULT_RANGE_FIRST_COLUMN + 2).Value2 = "KP End [m]"
 
+    ' Curve-section KP ranges (optional), to the right of the result-range table
+    ws.Cells(INPUT_DBM_HEADER_ROW - 2, INPUT_SECTION_FIRST_COLUMN).Value2 = "Curve section KP ranges (optional)"
+    ws.Cells(INPUT_DBM_HEADER_ROW - 1, INPUT_SECTION_FIRST_COLUMN).Value2 = "Shown as blue bands on every chart of the Plots tab (the DBM KP ranges are the amber bands). Not used in the fatigue calculation."
+    ws.Cells(INPUT_DBM_HEADER_ROW, INPUT_SECTION_FIRST_COLUMN).Value2 = "Curve ID"
+    ws.Cells(INPUT_DBM_HEADER_ROW, INPUT_SECTION_FIRST_COLUMN + 1).Value2 = "KP Start [m]"
+    ws.Cells(INPUT_DBM_HEADER_ROW, INPUT_SECTION_FIRST_COLUMN + 2).Value2 = "KP End [m]"
+
     ' Formatting
     ws.Cells.Font.Name = "Arial"
+    ws.Cells(INPUT_DBM_HEADER_ROW - 2, INPUT_SECTION_FIRST_COLUMN).Font.Size = 12
+    ws.Cells(INPUT_DBM_HEADER_ROW - 2, INPUT_SECTION_FIRST_COLUMN).Font.Bold = True
+    With ws.Range(ws.Cells(INPUT_DBM_HEADER_ROW, INPUT_SECTION_FIRST_COLUMN), _
+                  ws.Cells(INPUT_DBM_HEADER_ROW, INPUT_SECTION_FIRST_COLUMN + 2))
+        .Font.Bold = True
+        .Font.Color = vbWhite
+        .Interior.Color = RGB(31, 78, 121)
+        .HorizontalAlignment = xlCenter
+    End With
+    With ws.Range(ws.Cells(INPUT_DBM_HEADER_ROW + 1, INPUT_SECTION_FIRST_COLUMN), _
+                  ws.Cells(INPUT_DBM_HEADER_ROW + 40, INPUT_SECTION_FIRST_COLUMN + 2))
+        .Interior.Color = RGB(255, 242, 204)
+        .Borders.LineStyle = xlContinuous
+        .Borders.Color = RGB(217, 217, 217)
+    End With
+    ws.Range(ws.Columns(INPUT_SECTION_FIRST_COLUMN), ws.Columns(INPUT_SECTION_FIRST_COLUMN + 2)).ColumnWidth = 24
     ws.Cells(INPUT_DBM_HEADER_ROW - 2, RESULT_RANGE_FIRST_COLUMN).Font.Size = 12
     ws.Cells(INPUT_DBM_HEADER_ROW - 2, RESULT_RANGE_FIRST_COLUMN).Font.Bold = True
     With ws.Range(ws.Cells(INPUT_DBM_HEADER_ROW, RESULT_RANGE_FIRST_COLUMN), _
@@ -793,7 +857,7 @@ Private Sub BuildPlotsSheet(ByVal kpCount As Long)
     ws.Range("A1").Font.Bold = True
     If kpCount <= 0 Then
         ws.Range("A3").Value2 = "No stress-range data yet. Import a stress-range report, then run buttons 4 and 5."
-        AddU2Plot ws, ws.Range("A5").Left, ws.Range("A5").Top, False, 0, 0
+        AddOptionalPlots ws, ws.Range("A5").Left, ws.Range("A5").Top, False, 0, 0
         Exit Sub
     End If
 
@@ -891,7 +955,7 @@ Private Sub BuildPlotsSheet(ByVal kpCount As Long)
     FinishPlotChart plotCharts(3), "Total fatigue damage along KP - outer fibre (all life)", "Total fatigue damage", "0.0E+00", xMin, xMax
     FinishPlotChart plotCharts(4), "Fatigue UC along KP - inner fibre (all life)", "UC = damage / allowable", "0.0E+00", xMin, xMax
     FinishPlotChart plotCharts(5), "Fatigue UC along KP - outer fibre (all life)", "UC = damage / allowable", "0.0E+00", xMin, xMax
-    AddU2Plot ws, leftPos(0), topPos + 960, True, xMin, xMax
+    AddOptionalPlots ws, leftPos(0), topPos + 960, True, xMin, xMax
 End Sub
 
 Private Function ImportU2Core(ByVal reportPath As String) As Long
@@ -955,20 +1019,37 @@ Private Function ImportU2Core(ByVal reportPath As String) As Long
     ImportU2Core = columnCount - 1
 End Function
 
-' U2 chart of the Plots tab: one line per step of the U2 tab, with the DBM bands.
-' useLimits = True keeps the KP axis of the other charts.
-Private Sub AddU2Plot(ByVal ws As Worksheet, ByVal chartLeft As Double, ByVal chartTop As Double, _
-                      ByVal useLimits As Boolean, ByVal xMin As Double, ByVal xMax As Double)
-    Dim u2Ws As Worksheet, lastRow As Long, lastColumn As Long, c As Long
+' Chart of a KP-table tab (U2, COPEN, CPRESS) on the Plots tab. The tab holds one
+' or more blocks: a "KP [m]" column followed by one column per step, header in
+' row U2_HEADER_ROW, optional set name above the KP header. One line per step
+' column, with the DBM and curve bands. useLimits = True keeps the KP axis of
+' the other charts. Returns True when a chart was added.
+Private Function AddKpTablePlot(ByVal ws As Worksheet, ByVal sheetName As String, _
+        ByVal chartName As String, ByVal titleText As String, ByVal yAxisText As String, _
+        ByVal autoMinimum As Boolean, ByVal chartLeft As Double, ByVal chartTop As Double, _
+        ByVal useLimits As Boolean, ByVal xMin As Double, ByVal xMax As Double) As Boolean
+    Dim dataWs As Worksheet, lastRow As Long, lastColumn As Long, c As Long
     Dim plotChart As Chart, kpFirst As Double, kpLast As Double, unitStep As Double
-    If Not WorksheetExists(U2_SHEET) Then Exit Sub
-    Set u2Ws = ThisWorkbook.Worksheets(U2_SHEET)
-    lastRow = u2Ws.Cells(u2Ws.Rows.Count, 1).End(xlUp).Row
-    lastColumn = u2Ws.Cells(U2_HEADER_ROW, u2Ws.Columns.Count).End(xlToLeft).Column
-    If lastRow <= U2_HEADER_ROW + 1 Or lastColumn < 2 Then Exit Sub
+    Dim blockColumn As Long, setLabel As String, headerText As String, seriesName As String
+    Dim haveKp As Boolean, v As Double
+    If Not WorksheetExists(sheetName) Then Exit Function
+    Set dataWs = ThisWorkbook.Worksheets(sheetName)
+    lastColumn = dataWs.Cells(U2_HEADER_ROW, dataWs.Columns.Count).End(xlToLeft).Column
+    If lastColumn < 2 Then Exit Function
+    For c = 1 To lastColumn
+        If UCase$(Left$(Trim$(CStr(dataWs.Cells(U2_HEADER_ROW, c).Value2)), 2)) = "KP" Then
+            lastRow = dataWs.Cells(dataWs.Rows.Count, c).End(xlUp).Row
+            If lastRow > U2_HEADER_ROW Then
+                v = CDbl(dataWs.Cells(U2_HEADER_ROW + 1, c).Value2)
+                If Not haveKp Or v < kpFirst Then kpFirst = v
+                v = CDbl(dataWs.Cells(lastRow, c).Value2)
+                If Not haveKp Or v > kpLast Then kpLast = v
+                haveKp = True
+            End If
+        End If
+    Next c
+    If Not haveKp Then Exit Function
     If Not useLimits Then
-        kpFirst = CDbl(u2Ws.Cells(U2_HEADER_ROW + 1, 1).Value2)
-        kpLast = CDbl(u2Ws.Cells(lastRow, 1).Value2)
         If kpLast > kpFirst Then
             unitStep = 10 ^ Int(Log(kpLast - kpFirst) / Log(10#)) / 10#
             xMin = Int(kpFirst / unitStep) * unitStep
@@ -977,18 +1058,129 @@ Private Sub AddU2Plot(ByVal ws As Worksheet, ByVal chartLeft As Double, ByVal ch
             xMin = kpFirst: xMax = kpFirst + 1
         End If
     End If
-    Set plotChart = NewPlotChart(ws, "PL_U2", chartLeft, chartTop)
-    For c = 2 To lastColumn
-        AddPlotSeries plotChart, CStr(u2Ws.Cells(U2_HEADER_ROW, c).Value2), _
-            u2Ws.Range(u2Ws.Cells(U2_HEADER_ROW + 1, 1), u2Ws.Cells(lastRow, 1)), _
-            u2Ws.Range(u2Ws.Cells(U2_HEADER_ROW + 1, c), u2Ws.Cells(lastRow, c)), 0
+    Set plotChart = NewPlotChart(ws, chartName, chartLeft, chartTop)
+    For c = 1 To lastColumn
+        headerText = Trim$(CStr(dataWs.Cells(U2_HEADER_ROW, c).Value2))
+        If UCase$(Left$(headerText, 2)) = "KP" Then
+            blockColumn = c
+            setLabel = Trim$(CStr(dataWs.Cells(U2_HEADER_ROW - 1, c).Value2))
+            lastRow = dataWs.Cells(dataWs.Rows.Count, c).End(xlUp).Row
+        ElseIf Len(headerText) = 0 Then
+            blockColumn = 0
+        ElseIf blockColumn > 0 And lastRow > U2_HEADER_ROW Then
+            seriesName = headerText
+            If Len(setLabel) > 0 Then seriesName = setLabel & ": " & headerText
+            AddPlotSeries plotChart, seriesName, _
+                dataWs.Range(dataWs.Cells(U2_HEADER_ROW + 1, blockColumn), dataWs.Cells(lastRow, blockColumn)), _
+                dataWs.Range(dataWs.Cells(U2_HEADER_ROW + 1, c), dataWs.Cells(lastRow, c)), 0
+        End If
     Next c
-    FinishPlotChart plotChart, "Local U2 (lateral displacement) along KP", "U2 [model length unit]", "General", xMin, xMax
+    FinishPlotChart plotChart, titleText, yAxisText, "General", xMin, xMax
     On Error Resume Next
-    plotChart.Axes(xlValue).MinimumScaleIsAuto = True
+    If autoMinimum Then plotChart.Axes(xlValue).MinimumScaleIsAuto = True
     plotChart.Axes(xlCategory).TickLabelPosition = xlLow
     On Error GoTo 0
+    AddKpTablePlot = True
+End Function
+
+' U2, COPEN and CPRESS charts, stacked from chartTop downwards (only those with data).
+Private Sub AddOptionalPlots(ByVal ws As Worksheet, ByVal chartLeft As Double, ByVal chartTop As Double, _
+                             ByVal useLimits As Boolean, ByVal xMin As Double, ByVal xMax As Double)
+    If AddKpTablePlot(ws, U2_SHEET, "PL_U2", "Local U2 (lateral displacement) along KP", _
+        "U2 [model length unit]", True, chartLeft, chartTop, useLimits, xMin, xMax) Then chartTop = chartTop + 320
+    If AddKpTablePlot(ws, "COPEN", "PL_COPEN", "Contact opening COPEN along KP", _
+        "COPEN [model length unit]", True, chartLeft, chartTop, useLimits, xMin, xMax) Then chartTop = chartTop + 320
+    If AddKpTablePlot(ws, "CPRESS", "PL_CPRESS", "Contact pressure CPRESS along KP", _
+        "CPRESS [model pressure unit]", False, chartLeft, chartTop, useLimits, xMin, xMax) Then chartTop = chartTop + 320
 End Sub
+
+' Reads one COPEN_<set>.rpt / CPRESS_<set>.rpt of extract_contact.py and appends
+' it as a block of columns to the COPEN or CPRESS tab. Returns the variable name.
+Private Function AppendContactReport(ByVal reportPath As String) As String
+    Dim reportLines As Variant, parts As Variant, headerIndex As Long, i As Long, c As Long
+    Dim ws As Worksheet, previousSheet As Object, output() As Variant
+    Dim rowCount As Long, columnCount As Long, numberValue As Double
+    Dim varName As String, setName As String, lineText As String, firstColumn As Long
+    If Len(Dir$(reportPath)) = 0 Then Err.Raise vbObjectError + 710, , "File not found: " & reportPath
+    reportLines = ReadReportLines(reportPath)
+    headerIndex = -1
+    For i = LBound(reportLines) To UBound(reportLines)
+        lineText = Trim$(CStr(reportLines(i)))
+        If UCase$(Left$(lineText, 2)) = "KP" And InStr(lineText, vbTab) > 0 Then
+            headerIndex = i
+            Exit For
+        End If
+        If Len(varName) = 0 Then
+            If UCase$(Left$(lineText, 6)) = "CPRESS" Then varName = "CPRESS"
+            If UCase$(Left$(lineText, 5)) = "COPEN" Then varName = "COPEN"
+        End If
+        If UCase$(Left$(lineText, 4)) = "SET:" Then setName = Trim$(Mid$(lineText, 5))
+    Next i
+    If headerIndex < 0 Or Len(varName) = 0 Then Err.Raise vbObjectError + 711, , _
+        "Not a COPEN / CPRESS report of extract_contact.py: " & reportPath
+    parts = Split(CStr(reportLines(headerIndex)), vbTab)
+    columnCount = UBound(parts) + 1
+    If columnCount < 2 Then Err.Raise vbObjectError + 712, , "The report has no step columns: " & reportPath
+    ReDim output(1 To UBound(reportLines) - headerIndex + 1, 1 To columnCount)
+    For i = headerIndex + 1 To UBound(reportLines)
+        parts = Split(CStr(reportLines(i)), vbTab)
+        If UBound(parts) >= 1 Then
+            If TryNumber(parts(0), numberValue) Then
+                rowCount = rowCount + 1
+                output(rowCount, 1) = numberValue
+                For c = 1 To Application.Min(UBound(parts), columnCount - 1)
+                    If TryNumber(parts(c), numberValue) Then output(rowCount, c + 1) = numberValue
+                Next c
+            End If
+        End If
+    Next i
+    If rowCount = 0 Then Err.Raise vbObjectError + 713, , "The report has no data rows: " & reportPath
+
+    If Not WorksheetExists(varName) Then
+        Set previousSheet = ActiveSheet
+        ThisWorkbook.Worksheets.Add(After:=EnsureRangeSummarySheet()).Name = varName
+        On Error Resume Next
+        previousSheet.Activate
+        On Error GoTo 0
+        ThisWorkbook.Worksheets(varName).Cells.Font.Name = "Arial"
+    End If
+    Set ws = ThisWorkbook.Worksheets(varName)
+    ws.Range("A1").Value2 = varName & " along KP (imported with button 7). One block of columns per element set."
+    ws.Range("A1").Font.Bold = True
+    firstColumn = ws.Cells(U2_HEADER_ROW, ws.Columns.Count).End(xlToLeft).Column
+    If firstColumn = 1 And IsEmpty(ws.Cells(U2_HEADER_ROW, 1).Value2) Then
+        firstColumn = 1
+    Else
+        firstColumn = firstColumn + 2
+    End If
+    ws.Cells(2, firstColumn).Value2 = reportPath
+    ws.Cells(U2_HEADER_ROW - 1, firstColumn).Value2 = setName
+    ws.Cells(U2_HEADER_ROW - 1, firstColumn).Font.Bold = True
+    parts = Split(CStr(reportLines(headerIndex)), vbTab)
+    For c = 0 To columnCount - 1
+        ws.Cells(U2_HEADER_ROW, firstColumn + c).Value2 = Trim$(CStr(parts(c)))
+    Next c
+    ws.Cells(U2_HEADER_ROW, firstColumn).Resize(1, columnCount).Font.Bold = True
+    ws.Cells(U2_HEADER_ROW + 1, firstColumn).Resize(rowCount, columnCount).Value = output
+    ws.Columns(firstColumn).Resize(, columnCount).ColumnWidth = 16
+    AppendContactReport = varName
+End Function
+
+' pathList: report paths separated by "|". Replaces what was imported before.
+Private Function ImportContactCore(ByVal pathList As String) As Long
+    Dim paths As Variant, i As Long, sheetName As Variant
+    For Each sheetName In Array("COPEN", "CPRESS")
+        If WorksheetExists(CStr(sheetName)) Then ThisWorkbook.Worksheets(CStr(sheetName)).Cells.Clear
+    Next sheetName
+    paths = Split(pathList, "|")
+    For i = LBound(paths) To UBound(paths)
+        If Len(Trim$(CStr(paths(i)))) > 0 Then
+            AppendContactReport Trim$(CStr(paths(i)))
+            ImportContactCore = ImportContactCore + 1
+        End If
+    Next i
+    BuildPlotsSheet ExistingKPCount(ThisWorkbook.Worksheets("StressRangeID"))
+End Function
 
 Private Function NewPlotChart(ByVal ws As Worksheet, ByVal chartName As String, _
                               ByVal chartLeft As Double, ByVal chartTop As Double) As Chart
@@ -1054,23 +1246,50 @@ Private Sub FinishPlotChart(ByVal plotChart As Chart, ByVal titleText As String,
     AddDbmBands plotChart, xMin, xMax
 End Sub
 
-' Shades the DBM KP ranges of the INPUT tab on a chart: one semi-transparent
-' band per range, from KP Start to KP End over the full height of the plot.
+' Shades the DBM KP ranges (amber) and the curve-section KP ranges (blue) of the
+' INPUT tab on a chart: one semi-transparent band per range, from KP Start to
+' KP End over the full height of the plot.
 Private Sub AddDbmBands(ByVal plotChart As Chart, ByVal xMin As Double, ByVal xMax As Double)
-    Dim inputWs As Worksheet, lastRow As Long, r As Long
-    Dim startKP As Double, endKP As Double, tempValue As Double
-    Dim band As Shape, note As Shape, leftPos As Double, widthPos As Double, bandCount As Long
+    Dim note As Shape, dbmCount As Long, curveCount As Long, noteText As String
     If xMax <= xMin Or Not WorksheetExists(INPUT_SHEET) Then Exit Sub
     If plotChart.SeriesCollection.Count = 0 Then Exit Sub
+    dbmCount = AddBandsFromTable(plotChart, 2, RGB(255, 192, 0), 0.6, "DBM_band_", xMin, xMax)
+    curveCount = AddBandsFromTable(plotChart, INPUT_SECTION_FIRST_COLUMN + 1, RGB(68, 114, 196), 0.75, _
+                                   "Curve_band_", xMin, xMax)
+    If dbmCount > 0 Then noteText = "Amber bands = DBM KP ranges"
+    If curveCount > 0 Then
+        If Len(noteText) > 0 Then noteText = noteText & vbLf
+        noteText = noteText & "Blue bands = curve sections"
+    End If
+    If dbmCount > 0 And curveCount = 0 Then noteText = "Shaded bands = DBM KP ranges"
+    If Len(noteText) = 0 Then Exit Sub
+    On Error Resume Next
+    Set note = plotChart.Shapes.AddTextbox(msoTextOrientationHorizontal, 560, 2, 156, 28)
+    note.Name = "DBM_band_note"
+    note.TextFrame2.TextRange.Text = noteText
+    note.TextFrame2.TextRange.Font.Size = 8
+    note.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = RGB(89, 89, 89)
+    note.Line.Visible = msoFalse
+    note.Fill.Visible = msoFalse
+    On Error GoTo 0
+End Sub
+
+' Bands for the KP Start / KP End columns (startColumn, startColumn + 1) of an INPUT table.
+Private Function AddBandsFromTable(ByVal plotChart As Chart, ByVal startColumn As Long, _
+        ByVal bandColor As Long, ByVal bandTransparency As Double, ByVal namePrefix As String, _
+        ByVal xMin As Double, ByVal xMax As Double) As Long
+    Dim inputWs As Worksheet, lastRow As Long, r As Long
+    Dim startKP As Double, endKP As Double, tempValue As Double
+    Dim band As Shape, leftPos As Double, widthPos As Double
     Set inputWs = ThisWorkbook.Worksheets(INPUT_SHEET)
-    lastRow = Application.Max(inputWs.Cells(inputWs.Rows.Count, 2).End(xlUp).Row, _
-                              inputWs.Cells(inputWs.Rows.Count, 3).End(xlUp).Row)
+    lastRow = Application.Max(inputWs.Cells(inputWs.Rows.Count, startColumn).End(xlUp).Row, _
+                              inputWs.Cells(inputWs.Rows.Count, startColumn + 1).End(xlUp).Row)
     On Error Resume Next
     For r = INPUT_DBM_HEADER_ROW + 1 To lastRow
-        If IsPositiveOrZeroNumber(inputWs.Cells(r, 2).Value2) And _
-           IsPositiveOrZeroNumber(inputWs.Cells(r, 3).Value2) Then
-            startKP = CDbl(inputWs.Cells(r, 2).Value2)
-            endKP = CDbl(inputWs.Cells(r, 3).Value2)
+        If IsPositiveOrZeroNumber(inputWs.Cells(r, startColumn).Value2) And _
+           IsPositiveOrZeroNumber(inputWs.Cells(r, startColumn + 1).Value2) Then
+            startKP = CDbl(inputWs.Cells(r, startColumn).Value2)
+            endKP = CDbl(inputWs.Cells(r, startColumn + 1).Value2)
             If startKP > endKP Then
                 tempValue = startKP: startKP = endKP: endKP = tempValue
             End If
@@ -1083,25 +1302,16 @@ Private Sub AddDbmBands(ByVal plotChart As Chart, ByVal xMin As Double, ByVal xM
                 If widthPos < 1.5 Then widthPos = 1.5
                 Set band = plotChart.Shapes.AddShape(msoShapeRectangle, leftPos, _
                     plotChart.PlotArea.InsideTop, widthPos, plotChart.PlotArea.InsideHeight)
-                band.Name = "DBM_band_" & CStr(r)
-                band.Fill.ForeColor.RGB = RGB(255, 192, 0)
-                band.Fill.Transparency = 0.6
+                band.Name = namePrefix & CStr(r)
+                band.Fill.ForeColor.RGB = bandColor
+                band.Fill.Transparency = bandTransparency
                 band.Line.Visible = msoFalse
-                bandCount = bandCount + 1
+                AddBandsFromTable = AddBandsFromTable + 1
             End If
         End If
     Next r
-    If bandCount > 0 Then
-        Set note = plotChart.Shapes.AddTextbox(msoTextOrientationHorizontal, 560, 4, 156, 16)
-        note.Name = "DBM_band_note"
-        note.TextFrame2.TextRange.Text = "Shaded bands = DBM KP ranges"
-        note.TextFrame2.TextRange.Font.Size = 8
-        note.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = RGB(127, 96, 0)
-        note.Line.Visible = msoFalse
-        note.Fill.Visible = msoFalse
-    End If
     On Error GoTo 0
-End Sub
+End Function
 
 ' ---- user-specified S-N curves for KP ranges ---------------------------------
 
@@ -1304,6 +1514,13 @@ Private Sub UpdateControlSheetForInput()
     On Error GoTo 0
     AddWorkflowShape ControlSheet, "FD_U2", "6. Import U2 Report (optional plot)", _
         "ImportU2Report", "B22", RGB(89, 89, 89)
+    On Error Resume Next
+    ControlSheet.Shapes("FD_Contact").Delete
+    On Error GoTo 0
+    ControlSheet.Rows("23:27").RowHeight = 21
+    AddWorkflowShape ControlSheet, "FD_Contact", "7. Import COPEN / CPRESS Reports (optional plots)", _
+        "ImportContactReports", "B25", RGB(89, 89, 89)
+    ControlSheet.Shapes("FD_Contact").TextFrame2.TextRange.Font.Size = 11
 End Sub
 
 ' Reads the phase and load case from Workflow Controls. HYDROTEST or DESIGN
@@ -1582,6 +1799,8 @@ Private Sub BuildWorkflowControlsSheet()
         "SummarizeFatigueDamageAndUC", "B19", RGB(0, 112, 192)
     AddWorkflowShape ws, "FD_U2", "6. Import U2 Report (optional plot)", _
         "ImportU2Report", "B22", RGB(89, 89, 89)
+    AddWorkflowShape ws, "FD_Contact", "7. Import COPEN / CPRESS Reports (optional plots)", _
+        "ImportContactReports", "B25", RGB(89, 89, 89)
 
     ws.Columns("A").ColumnWidth = 2
     ws.Columns("B:F").ColumnWidth = 12
