@@ -8,46 +8,76 @@ Private Const CONTROL_SHEET As String = "Controls"
 Private Const INPUT_SHEET As String = "INPUT"
 Private Const TENSION_SHEET As String = "EffTension"
 Private Const STRAIN_SHEET As String = "MechStrain"
+Private Const U2_SHEET As String = "LocalU2"
 Private Const STATUS_CELL As String = "I4"
 Private Const INPUT_HEADER_ROW As Long = 5
 Private Const DATA_HEADER_ROW As Long = 4
 Private Const DATA_FIRST_COLUMN As Long = 17
 Private Const ZONE_WIDTH As Long = 80
-Private Const KIND_COUNT As Long = 5
+Private Const KIND_COUNT As Long = 8
 
 ' ---- report kinds -------------------------------------------------------------
 
 Private Function KindKeyword(ByVal kind As Long) As String
-    KindKeyword = CStr(Array("", "EFFECTIVE TENSION", "Z COORDINATE", "MECHANICAL STRAIN", "LE11", "THE11")(kind))
+    KindKeyword = CStr(Array("", "EFFECTIVE TENSION", "Z COORDINATE", "MECHANICAL STRAIN", "LE11", "THE11", _
+        "LOCAL U2", "COPEN", "CPRESS")(kind))
 End Function
 
 Private Function KindSheet(ByVal kind As Long) As String
-    If kind <= 2 Then KindSheet = TENSION_SHEET Else KindSheet = STRAIN_SHEET
+    KindSheet = CStr(Array("", TENSION_SHEET, TENSION_SHEET, STRAIN_SHEET, STRAIN_SHEET, STRAIN_SHEET, _
+        U2_SHEET, "COPEN", "CPRESS")(kind))
 End Function
 
+' Position of the kind's data zone on its tab (1 = first zone).
 Private Function KindSlot(ByVal kind As Long) As Long
-    If kind <= 2 Then KindSlot = kind Else KindSlot = kind - 2
+    KindSlot = CLng(Array(0, 1, 2, 1, 2, 3, 1, 1, 1)(kind))
 End Function
 
 Private Function KindTitle(ByVal kind As Long) As String
     KindTitle = CStr(Array("", "Effective tension along KP", "Z coordinate (water depth) along KP", _
         "Mechanical strain (LE11 - THE11) along KP, max / min", _
         "LE11 along KP, max / min", _
-        "THE11 along KP, max / min")(kind))
+        "THE11 along KP, max / min", _
+        "Local U2 (lateral displacement) along KP", _
+        "Contact opening COPEN along KP", _
+        "Contact pressure CPRESS along KP")(kind))
 End Function
 
 Private Function KindAxisTitle(ByVal kind As Long) As String
     KindAxisTitle = CStr(Array("", "Effective tension [model force unit]", "Z coordinate [model length unit]", _
-        "Mechanical strain [%]", "LE11 [%]", "THE11 [%]")(kind))
+        "Mechanical strain [%]", "LE11 [%]", "THE11 [%]", "U2 [model length unit]", _
+        "COPEN [model length unit]", "CPRESS [model pressure unit]")(kind))
 End Function
 
 Private Function KindFormat(ByVal kind As Long) As String
-    KindFormat = CStr(Array("", "#,##0", "#,##0", "0.00%", "0.00%", "0.00%")(kind))
+    KindFormat = CStr(Array("", "#,##0", "#,##0", "0.00%", "0.00%", "0.00%", "General", "General", "General")(kind))
 End Function
 
 Private Function ZoneColumn(ByVal kind As Long) As Long
     ZoneColumn = DATA_FIRST_COLUMN + (KindSlot(kind) - 1) * ZONE_WIDTH
 End Function
+
+' Last column of the kind's data zone. Tabs with one kind (LocalU2, COPEN,
+' CPRESS) use every column to the right, so several element sets fit.
+Private Function ZoneEndColumn(ByVal ws As Worksheet, ByVal kind As Long) As Long
+    If kind >= 6 Then
+        ZoneEndColumn = Application.Max(ws.Cells(DATA_HEADER_ROW, ws.Columns.Count).End(xlToLeft).Column, _
+                                        ZoneColumn(kind) + ZONE_WIDTH - 1)
+    Else
+        ZoneEndColumn = ZoneColumn(kind) + ZONE_WIDTH - 1
+    End If
+End Function
+
+Private Function ResultSheets() As Variant
+    ResultSheets = Array(TENSION_SHEET, STRAIN_SHEET, U2_SHEET, "COPEN", "CPRESS")
+End Function
+
+Private Sub RedrawAll()
+    Dim sheetName As Variant
+    For Each sheetName In ResultSheets()
+        RedrawSheet CStr(sheetName)
+    Next sheetName
+End Sub
 
 ' ---- public macros ------------------------------------------------------------
 
@@ -67,7 +97,7 @@ Public Sub SetupPipelinePlotsWorkbookAs(ByVal savePath As String)
     Application.DisplayAlerts = True
 End Sub
 
-' Button 1: pick one or more reports (EFFTENSION.rpt, ZCOORD.rpt, MECHSTRAIN.rpt, LE11.rpt, THE11.rpt).
+' Button 1: pick one or more reports (EFFTENSION, ZCOORD, MECHSTRAIN, LE11, THE11, LOCALU2, COPEN_<set>, CPRESS_<set>).
 Public Sub ImportPipelineReports()
     Dim picked As Variant, i As Long, pathList As String, fileCount As Long
     On Error GoTo Failed
@@ -80,8 +110,8 @@ Public Sub ImportPipelineReports()
     Application.ScreenUpdating = False
     fileCount = ImportCore(pathList)
     SetStatus "Imported " & CStr(fileCount) & " report(s). Charts updated."
-    MsgBox CStr(fileCount) & " report(s) imported. The charts are on the " & TENSION_SHEET & _
-           " and " & STRAIN_SHEET & " tabs.", vbInformation, "Pipeline plots"
+    MsgBox CStr(fileCount) & " report(s) imported. Each result has its own tab with the charts.", _
+           vbInformation, "Pipeline plots"
 CleanExit:
     Application.ScreenUpdating = True
     Exit Sub
@@ -110,8 +140,7 @@ End Sub
 Public Sub RedrawPipelineCharts()
     On Error GoTo Failed
     Application.ScreenUpdating = False
-    RedrawSheet TENSION_SHEET
-    RedrawSheet STRAIN_SHEET
+    RedrawAll
     SetStatus "Charts redrawn."
 CleanExit:
     Application.ScreenUpdating = True
@@ -180,8 +209,7 @@ Public Sub CopyKpRangesFromPath(ByVal workbookPath As String)
         Next r
     End If
     If Not wasOpen Then src.Close SaveChanges:=False
-    RedrawSheet TENSION_SHEET
-    RedrawSheet STRAIN_SHEET
+    RedrawAll
     SetStatus "KP ranges copied from " & workbookPath
 CleanExit:
     Application.EnableEvents = oldEvents
@@ -230,7 +258,7 @@ Private Sub BuildSheets()
     ws.Range("B1").Value2 = "Pipeline Result Plots along KP"
     ws.Range("B1").Font.Size = 16
     ws.Range("B1").Font.Bold = True
-    ws.Range("B2").Value2 = "Effective tension, Z coordinate and mechanical strain from the Abaqus extraction scripts."
+    ws.Range("B2").Value2 = "Effective tension, Z coordinate, strain, local U2, COPEN and CPRESS from the Abaqus extraction scripts."
     ws.Range("H3").Value2 = "Status"
     ws.Range("H3:M3").Font.Bold = True
     ws.Range("H3:M3").Font.Color = vbWhite
@@ -245,9 +273,9 @@ Private Sub BuildSheets()
     ws.Range("H6:M6").Font.Color = vbWhite
     ws.Range("H6:M6").Interior.Color = RGB(68, 114, 196)
     ws.Range("H7").Value2 = "1. Enter the DBM and curve-section KP ranges on the INPUT tab (or copy them from the fatigue workbook with button 3)."
-    ws.Range("H8").Value2 = "2. Button 1: select EFFTENSION.rpt, ZCOORD.rpt, MECHSTRAIN.rpt, LE11.rpt and/or THE11.rpt (hold Ctrl for several)."
-    ws.Range("H9").Value2 = "3. Charts: " & TENSION_SHEET & " tab (effective tension, Z coordinate) and " & STRAIN_SHEET & " tab (strains)."
-    ws.Range("H10").Value2 = "4. Button 2 redraws the charts after the KP ranges change. A new import replaces the same kind of report."
+    ws.Range("H8").Value2 = "2. Button 1: select the .rpt files (hold Ctrl for several): EFFTENSION, ZCOORD, MECHSTRAIN, LE11, THE11, LOCALU2, COPEN_<set>, CPRESS_<set>."
+    ws.Range("H9").Value2 = "3. Charts: " & TENSION_SHEET & " (tension, Z), " & STRAIN_SHEET & " (strains), " & U2_SHEET & ", COPEN and CPRESS tabs."
+    ws.Range("H10").Value2 = "4. Button 2 redraws the charts after the KP ranges change. A new import replaces the same kind of report (select all COPEN / CPRESS sets together)."
     AddButton ws, "PP_Import", "1. Import Reports", "ImportPipelineReports", "B4", RGB(31, 78, 121)
     AddButton ws, "PP_Redraw", "2. Redraw Charts", "RedrawPipelineCharts", "B7", RGB(112, 173, 71)
     AddButton ws, "PP_Copy", "3. Copy KP Ranges from Fatigue Workbook", "CopyKpRangesFromFatigueWorkbook", "B10", RGB(89, 89, 89)
@@ -292,10 +320,11 @@ Private Sub BuildSheets()
     ws.Columns("E:G").ColumnWidth = 18
 
     ' result tabs
-    For i = 0 To 1
-        Set ws = EnsureSheet(CStr(Array(TENSION_SHEET, STRAIN_SHEET)(i)))
+    For i = 0 To UBound(ResultSheets())
+        Set ws = EnsureSheet(CStr(ResultSheets()(i)))
         ws.Cells.Font.Name = "Arial"
-        ws.Range("A1").Value2 = CStr(Array("Effective tension and Z coordinate along KP", "Strain along KP")(i))
+        ws.Range("A1").Value2 = CStr(Array("Effective tension and Z coordinate along KP", "Strain along KP", _
+            "Local U2 along KP", "Contact opening COPEN along KP", "Contact pressure CPRESS along KP")(i))
         ws.Range("A1").Font.Size = 14
         ws.Range("A1").Font.Bold = True
         If ws.ChartObjects.Count = 0 Then ws.Range("A3").Value2 = "No data yet. Use button 1 on the Controls tab."
@@ -349,24 +378,23 @@ NotNumber:
 End Function
 
 Private Function ImportCore(ByVal pathList As String) As Long
-    Dim paths As Variant, i As Long
-    If Not SheetExists(INPUT_SHEET) Then BuildSheets
+    Dim paths As Variant, i As Long, cleared(1 To KIND_COUNT) As Boolean
+    If Not SheetExists(INPUT_SHEET) Or Not SheetExists("CPRESS") Then BuildSheets
     paths = Split(pathList, "|")
     For i = LBound(paths) To UBound(paths)
         If Len(Trim$(CStr(paths(i)))) > 0 Then
-            ImportOneReport Trim$(CStr(paths(i)))
+            ImportOneReport Trim$(CStr(paths(i))), cleared
             ImportCore = ImportCore + 1
         End If
     Next i
-    RedrawSheet TENSION_SHEET
-    RedrawSheet STRAIN_SHEET
+    RedrawAll
 End Function
 
-Private Sub ImportOneReport(ByVal reportPath As String)
+Private Sub ImportOneReport(ByVal reportPath As String, ByRef cleared() As Boolean)
     Dim reportLines As Variant, parts As Variant, headerIndex As Long, i As Long, c As Long
-    Dim ws As Worksheet, output() As Variant, lineText As String
+    Dim ws As Worksheet, output() As Variant, lineText As String, setName As String
     Dim rowCount As Long, columnCount As Long, numberValue As Double
-    Dim kind As Long, k As Long, firstColumn As Long
+    Dim kind As Long, k As Long, firstColumn As Long, zoneStart As Long, zoneEnd As Long
     If Len(Dir$(reportPath)) = 0 Then Err.Raise vbObjectError + 800, , "File not found: " & reportPath
     reportLines = ReadReportLines(reportPath)
     headerIndex = -1
@@ -381,14 +409,13 @@ Private Sub ImportOneReport(ByVal reportPath As String)
                 If UCase$(Left$(lineText, Len(KindKeyword(k)))) = KindKeyword(k) Then kind = k
             Next k
         End If
+        If UCase$(Left$(lineText, 4)) = "SET:" Then setName = Trim$(Mid$(lineText, 5))
     Next i
     If headerIndex < 0 Or kind = 0 Then Err.Raise vbObjectError + 801, , _
-        "Not a report of extract_tension_depth.py or extract_mech_strain.py: " & reportPath
+        "Not a report of the extraction scripts: " & reportPath
     parts = Split(CStr(reportLines(headerIndex)), vbTab)
     columnCount = UBound(parts) + 1
     If columnCount < 2 Then Err.Raise vbObjectError + 802, , "The report has no step columns: " & reportPath
-    If columnCount > ZONE_WIDTH - 2 Then Err.Raise vbObjectError + 803, , _
-        "The report has more than " & CStr(ZONE_WIDTH - 3) & " data columns; extract fewer steps: " & reportPath
     ReDim output(1 To UBound(reportLines) - headerIndex + 1, 1 To columnCount)
     For i = headerIndex + 1 To UBound(reportLines)
         parts = Split(CStr(reportLines(i)), vbTab)
@@ -405,10 +432,26 @@ Private Sub ImportOneReport(ByVal reportPath As String)
     If rowCount = 0 Then Err.Raise vbObjectError + 804, , "The report has no data rows: " & reportPath
 
     Set ws = ThisWorkbook.Worksheets(KindSheet(kind))
-    firstColumn = ZoneColumn(kind)
-    ws.Range(ws.Cells(1, firstColumn), ws.Cells(ws.Rows.Count, firstColumn + ZONE_WIDTH - 1)).Clear
+    zoneStart = ZoneColumn(kind)
+    zoneEnd = ZoneEndColumn(ws, kind)
+    If Not cleared(kind) Then
+        ws.Range(ws.Cells(1, zoneStart), ws.Cells(ws.Rows.Count, zoneEnd)).Clear
+        cleared(kind) = True
+    End If
+    ' next free block in the zone
+    firstColumn = zoneStart
+    For c = zoneEnd To zoneStart Step -1
+        If Len(CStr(ws.Cells(DATA_HEADER_ROW, c).Value2)) > 0 Then
+            firstColumn = c + 2
+            Exit For
+        End If
+    Next c
+    If kind < 6 And firstColumn + columnCount - 1 > zoneEnd Then Err.Raise vbObjectError + 803, , _
+        "Too many data columns for the " & KindSheet(kind) & " tab (limit " & CStr(ZONE_WIDTH - 2) & _
+        "); extract fewer steps: " & reportPath
+    ws.Cells(1, firstColumn).Value2 = setName
     ws.Cells(2, firstColumn).Value2 = KindTitle(kind) & " (chart data)"
-    ws.Cells(2, firstColumn).Font.Bold = True
+    ws.Range(ws.Cells(1, firstColumn), ws.Cells(2, firstColumn)).Font.Bold = True
     ws.Cells(3, firstColumn).Value2 = "Source file: " & reportPath
     parts = Split(CStr(reportLines(headerIndex)), vbTab)
     For c = 0 To columnCount - 1
@@ -416,21 +459,37 @@ Private Sub ImportOneReport(ByVal reportPath As String)
     Next c
     ws.Cells(DATA_HEADER_ROW, firstColumn).Resize(1, columnCount).Font.Bold = True
     ws.Cells(DATA_HEADER_ROW + 1, firstColumn).Resize(rowCount, columnCount).Value = output
-    ws.Range(ws.Cells(1, firstColumn), ws.Cells(ws.Rows.Count, firstColumn + ZONE_WIDTH - 1)).Font.Name = "Arial"
+    ws.Range(ws.Cells(1, firstColumn), ws.Cells(ws.Rows.Count, firstColumn + columnCount - 1)).Font.Name = "Arial"
     ws.Range(ws.Columns(firstColumn), ws.Columns(firstColumn + columnCount - 1)).ColumnWidth = 16
 End Sub
 
 ' ---- charts -------------------------------------------------------------------
 
-Private Function ZoneLastRow(ByVal ws As Worksheet, ByVal firstColumn As Long) As Long
-    If Left$(UCase$(Trim$(CStr(ws.Cells(DATA_HEADER_ROW, firstColumn).Value2))), 2) <> "KP" Then Exit Function
-    ZoneLastRow = ws.Cells(ws.Rows.Count, firstColumn).End(xlUp).Row
-    If ZoneLastRow <= DATA_HEADER_ROW Then ZoneLastRow = 0
+Private Function IsKpHeader(ByVal ws As Worksheet, ByVal c As Long) As Boolean
+    IsKpHeader = (Left$(UCase$(Trim$(CStr(ws.Cells(DATA_HEADER_ROW, c).Value2))), 2) = "KP")
+End Function
+
+' First and last KP over the blocks of a kind's zone. False when the zone is empty.
+Private Function ZoneKpRange(ByVal ws As Worksheet, ByVal kind As Long, _
+                             ByRef kpFirst As Double, ByRef kpLast As Double) As Boolean
+    Dim c As Long, lastRow As Long, v As Double
+    For c = ZoneColumn(kind) To ZoneEndColumn(ws, kind)
+        If IsKpHeader(ws, c) Then
+            lastRow = ws.Cells(ws.Rows.Count, c).End(xlUp).Row
+            If lastRow > DATA_HEADER_ROW Then
+                v = CDbl(ws.Cells(DATA_HEADER_ROW + 1, c).Value2)
+                If Not ZoneKpRange Or v < kpFirst Then kpFirst = v
+                v = CDbl(ws.Cells(lastRow, c).Value2)
+                If Not ZoneKpRange Or v > kpLast Then kpLast = v
+                ZoneKpRange = True
+            End If
+        End If
+    Next c
 End Function
 
 Private Sub RedrawSheet(ByVal sheetName As String)
-    Dim ws As Worksheet, kind As Long, i As Long, lastRow As Long, firstColumn As Long
-    Dim kpFirst As Double, kpLast As Double, haveKp As Boolean, v As Double
+    Dim ws As Worksheet, kind As Long, i As Long
+    Dim kpFirst As Double, kpLast As Double, haveKp As Boolean, a As Double, b As Double
     Dim xMin As Double, xMax As Double, unitStep As Double, chartTop As Double
     If Not SheetExists(sheetName) Then Exit Sub
     Set ws = ThisWorkbook.Worksheets(sheetName)
@@ -439,13 +498,9 @@ Private Sub RedrawSheet(ByVal sheetName As String)
     Next i
     For kind = 1 To KIND_COUNT
         If KindSheet(kind) = sheetName Then
-            firstColumn = ZoneColumn(kind)
-            lastRow = ZoneLastRow(ws, firstColumn)
-            If lastRow > 0 Then
-                v = CDbl(ws.Cells(DATA_HEADER_ROW + 1, firstColumn).Value2)
-                If Not haveKp Or v < kpFirst Then kpFirst = v
-                v = CDbl(ws.Cells(lastRow, firstColumn).Value2)
-                If Not haveKp Or v > kpLast Then kpLast = v
+            If ZoneKpRange(ws, kind, a, b) Then
+                If Not haveKp Or a < kpFirst Then kpFirst = a
+                If Not haveKp Or b > kpLast Then kpLast = b
                 haveKp = True
             End If
         End If
@@ -465,7 +520,7 @@ Private Sub RedrawSheet(ByVal sheetName As String)
     chartTop = ws.Range("A3").Top
     For kind = 1 To KIND_COUNT
         If KindSheet(kind) = sheetName Then
-            If ZoneLastRow(ws, ZoneColumn(kind)) > 0 Then
+            If ZoneKpRange(ws, kind, a, b) Then
                 AddZoneChart ws, kind, chartTop, xMin, xMax
                 chartTop = chartTop + 320
             End If
@@ -476,10 +531,11 @@ End Sub
 Private Sub AddZoneChart(ByVal ws As Worksheet, ByVal kind As Long, ByVal chartTop As Double, _
                          ByVal xMin As Double, ByVal xMax As Double)
     Dim plotObject As ChartObject, plotChart As Chart, plotSeries As Series
-    Dim firstColumn As Long, lastRow As Long, c As Long, headerText As String
+    Dim zoneStart As Long, zoneEnd As Long, lastRow As Long, c As Long, headerText As String
+    Dim blockColumn As Long, setLabel As String, maxRow As Long
     Dim yLow As Double, yHigh As Double, yUnit As Double
-    firstColumn = ZoneColumn(kind)
-    lastRow = ZoneLastRow(ws, firstColumn)
+    zoneStart = ZoneColumn(kind)
+    zoneEnd = ZoneEndColumn(ws, kind)
     Set plotObject = ws.ChartObjects.Add(ws.Range("A3").Left, chartTop, 720, 300)
     plotObject.Name = "PP_Chart" & CStr(kind)
     Set plotChart = plotObject.Chart
@@ -487,15 +543,27 @@ Private Sub AddZoneChart(ByVal ws As Worksheet, ByVal kind As Long, ByVal chartT
     Do While plotChart.SeriesCollection.Count > 0
         plotChart.SeriesCollection(1).Delete
     Loop
-    For c = firstColumn + 1 To firstColumn + ZONE_WIDTH - 2
+    For c = zoneStart To zoneEnd
         headerText = Trim$(CStr(ws.Cells(DATA_HEADER_ROW, c).Value2))
-        If Len(headerText) = 0 Then Exit For
-        Set plotSeries = plotChart.SeriesCollection.NewSeries
-        plotSeries.Name = headerText
-        plotSeries.XValues = ws.Range(ws.Cells(DATA_HEADER_ROW + 1, firstColumn), ws.Cells(lastRow, firstColumn))
-        plotSeries.Values = ws.Range(ws.Cells(DATA_HEADER_ROW + 1, c), ws.Cells(lastRow, c))
-        plotSeries.MarkerStyle = xlMarkerStyleNone
-        plotSeries.Format.Line.Weight = 1.5
+        If IsKpHeader(ws, c) Then
+            blockColumn = c
+            setLabel = Trim$(CStr(ws.Cells(1, c).Value2))
+            lastRow = ws.Cells(ws.Rows.Count, c).End(xlUp).Row
+            If lastRow > maxRow Then maxRow = lastRow
+        ElseIf Len(headerText) = 0 Then
+            blockColumn = 0
+        ElseIf blockColumn > 0 And lastRow > DATA_HEADER_ROW Then
+            Set plotSeries = plotChart.SeriesCollection.NewSeries
+            If Len(setLabel) > 0 Then
+                plotSeries.Name = setLabel & ": " & headerText
+            Else
+                plotSeries.Name = headerText
+            End If
+            plotSeries.XValues = ws.Range(ws.Cells(DATA_HEADER_ROW + 1, blockColumn), ws.Cells(lastRow, blockColumn))
+            plotSeries.Values = ws.Range(ws.Cells(DATA_HEADER_ROW + 1, c), ws.Cells(lastRow, c))
+            plotSeries.MarkerStyle = xlMarkerStyleNone
+            plotSeries.Format.Line.Weight = 1.5
+        End If
     Next c
     On Error Resume Next
     With plotChart
@@ -527,11 +595,11 @@ Private Sub AddZoneChart(ByVal ws As Worksheet, ByVal kind As Long, ByVal chartT
         .PlotArea.InsideHeight = 196
     End With
     ' Z coordinate: fit the axis to the data instead of starting at zero
-    If kind = 2 Then
-        yLow = Application.WorksheetFunction.Min(ws.Range(ws.Cells(DATA_HEADER_ROW + 1, firstColumn + 1), _
-            ws.Cells(lastRow, firstColumn + ZONE_WIDTH - 2)))
-        yHigh = Application.WorksheetFunction.Max(ws.Range(ws.Cells(DATA_HEADER_ROW + 1, firstColumn + 1), _
-            ws.Cells(lastRow, firstColumn + ZONE_WIDTH - 2)))
+    If kind = 2 And maxRow > DATA_HEADER_ROW Then
+        yLow = Application.WorksheetFunction.Min(ws.Range(ws.Cells(DATA_HEADER_ROW + 1, zoneStart + 1), _
+            ws.Cells(maxRow, zoneEnd)))
+        yHigh = Application.WorksheetFunction.Max(ws.Range(ws.Cells(DATA_HEADER_ROW + 1, zoneStart + 1), _
+            ws.Cells(maxRow, zoneEnd)))
         If yHigh > yLow Then
             yUnit = 10 ^ Int(Log(yHigh - yLow) / Log(10#))
             plotChart.Axes(xlValue).MinimumScale = Int(yLow / yUnit) * yUnit

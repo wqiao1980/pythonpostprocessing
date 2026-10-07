@@ -7,7 +7,9 @@ Files in C:\SeabedAnalysis
   extract_contact.py           Optional. COPEN / CPRESS along KP for the plots.
   extract_tension_depth.py     Optional. Effective tension and Z coordinate along KP.
   extract_mech_strain.py       Optional. Max / min mechanical strain along KP.
-  PipelineResultPlots.xlsm     Separate workbook that plots those two.
+  extract_local_u2.py          Optional. Local U2 along KP for chosen steps.
+  PipelineResultPlots.xlsm     Separate workbook that plots tension, Z, strain,
+                               local U2, COPEN and CPRESS, one tab each.
   run_fatigue_workbook.py      Step 2. Feeds the reports to the Excel workbook.
   FatigueDamageCal_ManualWorkflows_INPUT.xlsm
                                The fatigue workbook with the INPUT tab (never
@@ -226,16 +228,34 @@ Keep both scripts in the same folder as extract_stress_ranges.py.
    MECHSTRAIN.rpt, LE11.rpt, THE11.rpt, each with a MAX and a MIN column per
    step, strain as a fraction.
 
-3. Plot: open PipelineResultPlots.xlsm.
+3. Local U2 (needs U in *NODE OUTPUT):
+
+     abaqus python extract_local_u2.py --odb model.odb --step 22 23
+     abaqus python extract_local_u2.py --odb model.odb --step-range 20 23 --step 14
+
+     --step-range / --step       As above. No step given: the last step.
+     --vertical-axis x|y|z       Global vertical axis for the conversion from
+                                 global U to local U2 (default z).
+     --u2-as-stored              Use the stored U2 component, no conversion.
+
+   Output in pipeline_reports: LOCALU2.rpt, one column per step, at the nodes.
+
+4. COPEN / CPRESS: extract_contact.py (see above). Its COPEN_<set>.rpt and
+   CPRESS_<set>.rpt reports can be imported here as well.
+
+5. Plot: open PipelineResultPlots.xlsm.
    - INPUT tab: DBM KP ranges and curve-section KP ranges. Button 3 copies
      both tables from the INPUT tab of the fatigue workbook.
    - Button 1: select the .rpt files (hold Ctrl for several). The EffTension
      tab gets the effective tension and Z coordinate charts, the MechStrain
-     tab the strain charts, with amber DBM bands and blue curve bands. The
-     chart data are on the same tabs, from column Q.
+     tab the strain charts, the LocalU2, COPEN and CPRESS tabs one chart
+     each, all with amber DBM bands and blue curve bands. The chart data are
+     on the same tabs, from column Q. For COPEN / CPRESS select the reports
+     of all element sets together: each set is one block of columns and its
+     lines are named "set: step".
    - Button 2 redraws the charts after the KP ranges change.
    - A new import replaces the same kind of report; up to 77 data columns
-     per report.
+     per report on the EffTension and MechStrain tabs.
    PipelineResultPlots.bas is a copy of the workbook's macro module.
 
 
