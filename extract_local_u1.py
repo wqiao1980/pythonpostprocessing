@@ -5,8 +5,9 @@ Extract the local U1 (axial displacement) of the pipeline along KP from an
 Abaqus ODB, for the steps or step ranges you give.
 
 The ODB stores displacements in the global system. Local U1 is the global
-displacement projected on the as-laid pipe axis at each node (unit tangent
-from the neighbouring nodes), positive towards increasing KP. With
+displacement projected on the pipe axis at each node (unit tangent from the
+neighbouring nodes), positive towards increasing KP. The axis is the original
+mesh, or the deformed shape at the step given with --aslaid-step. With
 --relative-to STEP the U1 of that step is subtracted, e.g. to see the axial
 displacement since the as-laid step or the walking per cycle.
 
@@ -17,6 +18,7 @@ and extract_tension_depth.py (this script uses their routines):
     abaqus python extract_local_u1.py --odb model.odb --step 22 23
     abaqus python extract_local_u1.py --odb model.odb --step-range 20 23 --step 14
     abaqus python extract_local_u1.py --odb model.odb --step-range 20 23 --relative-to 5
+    abaqus python extract_local_u1.py --odb model.odb --step 22 23 --aslaid-step 5 --relative-to 5
     abaqus python extract_local_u1.py -h          # all options
 
 Output, in the output folder (default pipeline_reports):
@@ -48,6 +50,10 @@ def parse_args(argv):
                          "the as-laid step")
     ap.add_argument("--u1-as-stored", action="store_true",
                     help="use the stored U1 component without converting it")
+    ap.add_argument("--aslaid-step", metavar="STEP",
+                    help="as-laid step (number or part of the name): the pipe axis that "
+                         "defines the local directions is taken from the deformed shape at "
+                         "this step. Default: the original mesh")
     ap.add_argument("--frame", type=int, default=-1,
                     help="frame used in each step (default -1 = last)")
     ap.add_argument("--elset", help="pipeline element set (default %s)" % es.ELSET)
@@ -83,6 +89,23 @@ def read_local_u1(frame, inst_name, nodes, axial, as_stored):
     return dict((n, sum(u[k] * axial[n][k] for k in range(3))) for n, u in vec.items())
 
 
+def axis_coordinates(odb, spec, frame_index, inst_name, nodes, node_xyz):
+    """(node coordinates that define the pipe axis, description). spec = the
+    as-laid step: its deformed shape (original coordinates + U) is used.
+    No spec: the original mesh."""
+    if not spec:
+        return node_xyz, "original mesh"
+    name = es.resolve_step(odb, et.step_spec(spec))
+    frame = odb.steps[name].frames[frame_index]
+    if "U" not in frame.fieldOutputs.keys():
+        raise KeyError("No U output in the as-laid step %s" % name)
+    vec = es.read_nodal_vector(frame, "U", inst_name, set(nodes))
+    xyz = dict(node_xyz)
+    for n, u in vec.items():
+        xyz[n] = [node_xyz[n][k] + u[k] for k in range(3)]
+    return xyz, "deformed shape at the as-laid step %s" % name
+
+
 def main():
     args = parse_args(sys.argv[1:])
     if args.elset:
@@ -106,7 +129,10 @@ def main():
         _order, _kp, node_kp, node_xyz = es.build_kp(inst, elems)
         steps = et.requested_steps(odb, args.step_range, args.step) or [names[-1]]
         nodes = sorted(node_kp, key=lambda n: node_kp[n])
-        axial = axial_directions(nodes, node_xyz)
+        axis_xyz, axis_text = axis_coordinates(odb, args.aslaid_step, args.frame, inst.name,
+                                               nodes, node_xyz)
+        print("  pipe axis: %s" % axis_text)
+        axial = axial_directions(nodes, axis_xyz)
         ref, ref_name = None, None
         if args.relative_to:
             ref_name = es.resolve_step(odb, et.step_spec(args.relative_to))
@@ -138,7 +164,8 @@ def main():
             ["LOCAL U1 along KP at frame %d of each step" % args.frame,
              "ODB: %s" % os.path.abspath(args.odb),
              "Stored U1 component of the ODB, not converted." if args.u1_as_stored else
-             "Global U projected on the as-laid pipe axis; positive towards increasing KP.",
+             "Global U projected on the pipe axis (%s); positive towards increasing "
+             "KP." % axis_text,
              "Relative to step: %s (its U1 is subtracted)." % ref_name if ref_name else
              "Total displacement (not relative to another step).",
              "Units: KP in m, U1 in model length units."],

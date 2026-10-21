@@ -8,6 +8,7 @@ Files in C:\SeabedAnalysis
   extract_tension_depth.py     Optional. Effective tension and Z coordinate along KP.
   extract_mech_strain.py       Optional. Max / min mechanical strain along KP.
   extract_local_u2.py          Optional. Local U2 along KP for chosen steps.
+  extract_local_u1.py          Optional. Local U1 (axial) along KP for chosen steps.
   PipelineResultPlots.xlsm     Separate workbook that plots tension, Z, strain,
                                local U2, COPEN and CPRESS, one tab each.
   run_fatigue_workbook.py      Step 2. Feeds the reports to the Excel workbook.
@@ -237,8 +238,31 @@ Keep both scripts in the same folder as extract_stress_ranges.py.
      --vertical-axis x|y|z       Global vertical axis for the conversion from
                                  global U to local U2 (default z).
      --u2-as-stored              Use the stored U2 component, no conversion.
+     --aslaid-step STEP          As-laid step: the pipe axis that defines the
+                                 local directions is the deformed shape at this
+                                 step (original coordinates + U). Not given:
+                                 the original mesh.
+     --relative-to STEP          Subtract the U2 of that step (e.g. as-laid).
+
+   Example, pipe laid onto the route in step 5:
+     abaqus python extract_local_u2.py --odb model.odb --step 22 23 --aslaid-step 5 --relative-to 5
 
    Output in pipeline_reports: LOCALU2.rpt, one column per step, at the nodes.
+
+   Local U1 (axial displacement), same options plus:
+
+     abaqus python extract_local_u1.py --odb model.odb --step 22 23
+     abaqus python extract_local_u1.py --odb model.odb --step-range 20 23 --relative-to 5
+
+     --relative-to STEP          Subtract the U1 of that step (e.g. as-laid),
+                                 so the result is the axial displacement since
+                                 that step / the walking per cycle.
+     --u1-as-stored              Use the stored U1 component, no conversion.
+     --aslaid-step STEP          As for U2: pipe axis from the deformed shape at
+                                 this step; default the original mesh.
+
+   Local U1 = global U projected on the pipe axis, positive towards
+   increasing KP. Output: LOCALU1.rpt, one column per step, at the nodes.
 
 4. COPEN / CPRESS: extract_contact.py (see above). Its COPEN_<set>.rpt and
    CPRESS_<set>.rpt reports can be imported here as well.
